@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      - JWT_SECRET=change-this-to-a-long-random-string
+      # DATA_DIR defaults to ./data inside the container (mounted below)
+    volumes:
+      - app-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  app-data:
