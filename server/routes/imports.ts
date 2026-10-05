@@ -37,7 +37,7 @@ importRoutes.post("/parse", async (c) => {
       filename: origName,
       size: file.size,
       sheetNames,
-      preview: rows.slice(0, 12),
+      preview: rows.slice(0, 50),
       totalRows: rows.length,
       savedFormats: formats,
     });

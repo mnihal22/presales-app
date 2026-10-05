@@ -198,17 +198,27 @@ export default function QuotesTab({ projectId, revisions }: any) {
                   <div className="mt-2 flex items-center gap-2">
                     <label className="text-xs text-muted-foreground">Skip first N rows (headers)</label>
                     <Input className="h-8 w-20" type="number" value={skipRows} onChange={(e) => setSkipRows(e.target.value)} />
+                    <span className="text-xs text-muted-foreground">· first N rows are ignored during import</span>
                   </div>
-                  <table className="mt-2 w-full text-xs">
-                    <tbody>
-                      {parseResult.preview.slice(0, 6).map((row: any[], ri: number) => (
-                        <tr key={ri} className="border-b">
-                          <td className="px-1 py-0.5 text-muted-foreground">{ri + 1}</td>
-                          {row.slice(0, 8).map((v: any, ci: number) => <td key={ci} className="px-1 py-0.5 max-w-32 truncate">{String(v)}</td>)}
+                  <div className="text-xs font-medium mt-2">Preview — first {Math.min(parseResult.preview.length, 50)} rows (scroll to find where the real data starts)</div>
+                  <div className="mt-1 max-h-72 overflow-y-auto rounded border">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-muted">
+                        <tr>
+                          <th className="px-1 py-0.5 text-left font-medium">#</th>
+                          {previewHeaders.slice(0, 8).map((i: number) => <th key={i} className="px-1 py-0.5 text-left font-medium">Col {i + 1}</th>)}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {parseResult.preview.map((row: any[], ri: number) => (
+                          <tr key={ri} className={`border-b ${ri < Number(skipRows || 0) ? "bg-amber-50 text-muted-foreground" : ""}`}>
+                            <td className="px-1 py-0.5 text-muted-foreground">{ri + 1}</td>
+                            {row.slice(0, 8).map((v: any, ci: number) => <td key={ci} className="px-1 py-0.5 max-w-32 truncate">{String(v)}</td>)}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Checkbox checked={!!saveFormatAs} onCheckedChange={(v) => setSaveFormatAs(v ? "Standard format" : "")} />

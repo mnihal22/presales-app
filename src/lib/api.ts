@@ -26,7 +26,10 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
   const res = await fetch(path, { ...options, headers });
   if (res.status === 401) {
     setToken(null);
-    window.location.href = "/login";
+    // Don't redirect when already on the login page — that causes a reload loop
+    if (!window.location.pathname.startsWith("/login")) {
+      window.location.href = "/login";
+    }
     throw new ApiError(401, "unauthorized");
   }
   if (!res.ok) {

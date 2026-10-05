@@ -127,6 +127,18 @@ projectRoutes.put("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// --- Delete project (admin only) ---------------------------------------------
+projectRoutes.delete("/:id", requireRole("admin"), (c) => {
+  const id = Number(c.req.param("id"));
+  const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as any;
+  if (!project) return c.json({ error: "not found" }, 404);
+  // FK ON DELETE CASCADE handles members, revisions→costing, quotes→items,
+  // tasks, activity, options→option_items, service_calcs, attachments rows.
+  db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+  logActivity({ userId: c.get("user").id, action: "project.deleted", entityType: "project", entityId: id, details: `${project.code} — ${project.name}` });
+  return c.json({ ok: true });
+});
+
 // --- Revisions ---------------------------------------------------------------
 projectRoutes.post("/:id/revisions", (c) => {
   const projectId = Number(c.req.param("id"));

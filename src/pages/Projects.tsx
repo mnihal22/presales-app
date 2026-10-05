@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Plus } from "lucide-react";
+import { Plus, Pencil, Trash2 } from "lucide-react";
 
 const statusColor: Record<string, string> = {
   draft: "bg-slate-100 text-slate-700",
@@ -64,6 +64,43 @@ export default function Projects() {
     }
   };
 
+  // ---- edit / delete ----
+  const [editProject, setEditProject] = useState<any>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editCustomerId, setEditCustomerId] = useState<string>("");
+  const [editMemberIds, setEditMemberIds] = useState<number[]>([]);
+
+  const openEdit = async (p: any) => {
+    const d = await api<any>(`/api/projects/${p.id}`);
+    setEditProject(p);
+    setEditName(d.project.name);
+    setEditDescription(d.project.description || "");
+    setEditCustomerId(d.project.customer_id ? String(d.project.customer_id) : "");
+    setEditMemberIds(d.members.map((m: any) => m.id));
+  };
+
+  const saveEdit = async () => {
+    await api(`/api/projects/${editProject.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: editName,
+        description: editDescription || null,
+        customerId: editCustomerId ? Number(editCustomerId) : null,
+        memberIds: editMemberIds,
+      }),
+    });
+    setEditProject(null);
+    load();
+  };
+
+  const deleteProject = async (p: any) => {
+    if (!confirm(`Delete ${p.code} — ${p.name}?\n\nThis permanently removes the project with all its revisions, costing sheets, quotes, tasks and options. This cannot be undone.`)) return;
+    if (!confirm("Are you absolutely sure?")) return;
+    await api(`/api/projects/${p.id}`, { method: "DELETE" });
+    load();
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -115,11 +152,12 @@ export default function Projects() {
               <th className="px-4 py-3">Code</th><th className="px-4 py-3">Name</th><th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Owner</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Revs</th>
               <th className="px-4 py-3">Open tasks</th><th className="px-4 py-3">Updated</th>
+              {canCreate && <th className="px-4 py-3 text-right">Actions</th>}
             </tr>
           </thead>
           <tbody>
             {projects.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No projects yet.</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No projects yet.</td></tr>
             )}
             {projects.map((p) => (
               <tr key={p.id} className="border-b last:border-0 hover:bg-slate-50">
@@ -131,11 +169,57 @@ export default function Projects() {
                 <td className="px-4 py-2.5">{p.revision_count}</td>
                 <td className="px-4 py-2.5">{p.open_tasks}</td>
                 <td className="px-4 py-2.5 text-muted-foreground">{p.updated_at?.slice(0, 10)}</td>
+                {canCreate && (
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <Button variant="ghost" size="icon" title="Edit project" onClick={() => openEdit(p)}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    {user?.role === "admin" && (
+                      <Button variant="ghost" size="icon" title="Delete project" onClick={() => deleteProject(p)}>
+                        <Trash2 className="h-4 w-4 text-red-600" />
+                      </Button>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      <Dialog open={!!editProject} onOpenChange={(v) => { if (!v) setEditProject(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit project {editProject?.code}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><label className="text-sm font-medium">Project name</label>
+              <Input value={editName} onChange={(e) => setEditName(e.target.value)} /></div>
+            <div><label className="text-sm font-medium">Customer</label>
+              <Select value={editCustomerId} onValueChange={setEditCustomerId}>
+                <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
+                <SelectContent>
+                  {customers.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select></div>
+            <div><label className="text-sm font-medium">Description</label>
+              <Input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} /></div>
+            <div>
+              <label className="text-sm font-medium">Assigned presales</label>
+              <div className="mt-1 space-y-1.5 rounded-md border p-2 max-h-40 overflow-y-auto">
+                {presalesUsers.map((u) => (
+                  <label key={u.id} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={editMemberIds.includes(u.id)}
+                      onCheckedChange={(v) => setEditMemberIds(v ? [...editMemberIds, u.id] : editMemberIds.filter((x) => x !== u.id))}
+                    />
+                    {u.display_name}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <Button className="w-full" disabled={!editName} onClick={saveEdit}>Save changes</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
