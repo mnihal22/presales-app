@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,11 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    api<{ version: string }>("/api/version").then((v) => setVersion(v.version)).catch(() => {});
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,9 +34,10 @@ export default function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
-      <Card className="w-full max-w-sm">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#2B176D] via-[#3b2385] to-[#1a0f45] p-4">
+      <Card className="w-full max-w-sm shadow-2xl">
         <CardHeader>
+          <img src="/logo.png" alt="ATCOM" className="h-8 w-auto self-start mb-3" />
           <CardTitle className="text-xl">Costing &amp; Proposal Hub</CardTitle>
           <CardDescription>Sign in with your company account</CardDescription>
         </CardHeader>
@@ -45,9 +52,10 @@ export default function Login() {
               <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
             </div>
             {error && <div className="text-sm text-red-600">{error}</div>}
-            <Button className="w-full" disabled={busy || !username || !password}>
+            <Button className="w-full bg-[#2B176D] hover:bg-[#3b2385]" disabled={busy || !username || !password}>
               {busy ? "Signing in…" : "Sign in"}
             </Button>
+            <div className="text-center text-[10px] text-muted-foreground pt-1">v{version || "…"}</div>
           </form>
         </CardContent>
       </Card>

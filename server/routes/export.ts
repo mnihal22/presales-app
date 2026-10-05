@@ -90,7 +90,7 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
     rows = db
       .prepare(
         `SELECT ci.* FROM costing_items ci JOIN option_items oi ON oi.costing_item_id = ci.id
-         WHERE oi.option_id = ? AND ci.in_proposal = 1 ORDER BY ci.sort, ci.id`
+         WHERE oi.option_id = ? AND ci.in_proposal = 1 AND NOT (ci.is_amc_basis = 1 AND ci.in_proposal = 0) ORDER BY ci.sort, ci.id`
       )
       .all(optionId) as CostingRow[];
   } else {

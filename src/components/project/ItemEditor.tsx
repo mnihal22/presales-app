@@ -20,6 +20,7 @@ export interface ItemForm {
   exchRate: string; landedFactor: string; sellOverride: string; isAmc: boolean; isSwSupport: boolean;
   itemGrouping: string; productGrouping: string; offerGrouping: string; inProposal: boolean;
   mapNo: string; aplUnitPrice: string; aplDiscountPct: string; notes: string;
+  isAmcBasis: boolean;
 }
 
 export const emptyItemForm: ItemForm = {
@@ -29,6 +30,7 @@ export const emptyItemForm: ItemForm = {
   exchRate: "1", landedFactor: "1", sellOverride: "", isAmc: false, isSwSupport: false,
   itemGrouping: "", productGrouping: "", offerGrouping: "", inProposal: true,
   mapNo: "", aplUnitPrice: "", aplDiscountPct: "0", notes: "",
+  isAmcBasis: false,
 };
 
 export function itemToForm(it: any): ItemForm {
@@ -43,6 +45,7 @@ export function itemToForm(it: any): ItemForm {
     itemGrouping: it.item_grouping || "", productGrouping: it.product_grouping || "", offerGrouping: it.offer_grouping || "",
     inProposal: !!it.in_proposal, mapNo: it.map_no || "", aplUnitPrice: s(it.apl_unit_price),
     aplDiscountPct: s(it.apl_discount_pct ?? 0), notes: it.notes || "",
+    isAmcBasis: !!it.is_amc_basis,
   };
 }
 
@@ -60,6 +63,7 @@ export function formToPayload(f: ItemForm) {
     itemGrouping: f.itemGrouping || null, productGrouping: f.productGrouping || null,
     offerGrouping: f.offerGrouping || null, inProposal: f.inProposal, mapNo: f.mapNo || null,
     aplUnitPrice: num(f.aplUnitPrice), aplDiscountPct: Number(f.aplDiscountPct) || 0,
+    isAmcBasis: f.isAmcBasis,
   };
 }
 
@@ -163,11 +167,20 @@ export default function ItemEditor({
               <Field label="Product grouping"><Input value={f.productGrouping} onChange={(e) => set({ productGrouping: e.target.value })} /></Field>
               <Field label="Offer grouping"><Input value={f.offerGrouping} onChange={(e) => set({ offerGrouping: e.target.value })} placeholder="sbc1k" /></Field>
             </div>
-            <div className="flex gap-6">
+            <div className="flex flex-wrap gap-6">
               <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.inProposal} onCheckedChange={(v) => set({ inProposal: !!v })} /> Include in proposal</label>
+              <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isAmcBasis} onCheckedChange={(v) => set({ isAmcBasis: !!v })} /> Counts toward AMC base</label>
               <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isAmc} onCheckedChange={(v) => set({ isAmc: !!v })} /> AMC</label>
               <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isSwSupport} onCheckedChange={(v) => set({ isSwSupport: !!v })} /> Software support</label>
             </div>
+            {f.isAmcBasis && (
+              <p className="text-xs text-violet-700 bg-violet-50 rounded px-2 py-1">
+                This item's value feeds the "% of AMC base" service calculation.
+                {f.inProposal
+                  ? " It is new equipment — it also stays in the proposal and sale totals."
+                  : " It is legacy/existing equipment — excluded from the proposal and sale totals, AMC base only."}
+              </p>
+            )}
           </div>
 
           <Field label="Notes"><Input value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>

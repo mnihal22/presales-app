@@ -237,6 +237,8 @@ addColumnIfMissing("costing_items", "offer_grouping", "offer_grouping TEXT");
 addColumnIfMissing("costing_items", "in_proposal", "in_proposal INTEGER NOT NULL DEFAULT 1");
 addColumnIfMissing("costing_items", "map_no", "map_no TEXT");
 addColumnIfMissing("costing_items", "auto_map", "auto_map TEXT");
+addColumnIfMissing("costing_items", "is_amc_basis", "is_amc_basis INTEGER NOT NULL DEFAULT 0"); // counts toward AMC % base
+addColumnIfMissing("service_calcs", "percent_base", "percent_base TEXT NOT NULL DEFAULT 'capex'"); // capex | amc_basis
 addColumnIfMissing("costing_items", "apl_unit_price", "apl_unit_price REAL");      // 171H: APL unit price in AED
 addColumnIfMissing("costing_items", "apl_discount_pct", "apl_discount_pct REAL NOT NULL DEFAULT 0"); // 171H: extended discount on APL
 

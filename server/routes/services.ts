@@ -27,7 +27,15 @@ serviceRoutes.get("/project/:projectId", (c) => {
     )
     .all(projectId) as CostingRow[];
   const capexSale = capex.map(computeRow).reduce((s, r) => s + r.selling_total_aed, 0);
-  return c.json({ services: rows, capexSaleAed: capexSale });
+  const amcBasis = db
+    .prepare(
+      `SELECT ci.* FROM costing_items ci
+       JOIN revisions r ON r.id = ci.revision_id
+       WHERE r.project_id = ? AND ci.is_amc_basis = 1`
+    )
+    .all(projectId) as CostingRow[];
+  const amcBasisSale = amcBasis.map(computeRow).reduce((s, r) => s + (r.sell_price_for_summary || r.landed_total_aed), 0);
+  return c.json({ services: rows, capexSaleAed: capexSale, amcBasisSaleAed: amcBasisSale });
 });
 
 const schema = z.object({
@@ -39,6 +47,7 @@ const schema = z.object({
   effort: z.number().min(0).optional().nullable(),
   effortUnit: z.string().optional().nullable(),
   percent: z.number().min(0).optional().nullable(),
+  percentBase: z.enum(["capex", "amc_basis"]).default("capex"),
   amount: z.number().min(0).default(0),
   notes: z.string().optional().nullable(),
 });
@@ -58,10 +67,10 @@ serviceRoutes.post("/", async (c) => {
 
   const res = db
     .prepare(
-      `INSERT INTO service_calcs (project_id, revision_id, name, method, rate, effort, effort_unit, percent, amount, notes, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO service_calcs (project_id, revision_id, name, method, rate, effort, effort_unit, percent, percent_base, amount, notes, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     )
-    .run(d.projectId, d.revisionId ?? null, d.name, d.method, d.rate ?? null, d.effort ?? null, d.effortUnit ?? null, d.percent ?? null, computeAmount(d), d.notes ?? null, user.id);
+    .run(d.projectId, d.revisionId ?? null, d.name, d.method, d.rate ?? null, d.effort ?? null, d.effortUnit ?? null, d.percent ?? null, d.percentBase, computeAmount(d), d.notes ?? null, user.id);
   logActivity({ projectId: d.projectId, userId: user.id, action: "service.created", entityType: "service_calc", entityId: Number(res.lastInsertRowid), details: d.name });
   return c.json({ id: Number(res.lastInsertRowid) }, 201);
 });
@@ -76,8 +85,8 @@ serviceRoutes.put("/:id", async (c) => {
   const d = parsed.data;
   const merged = { ...svc, ...Object.fromEntries(Object.entries(d).filter(([, v]) => v !== undefined)) };
   db.prepare(
-    `UPDATE service_calcs SET name=?, method=?, rate=?, effort=?, effort_unit=?, percent=?, amount=?, notes=? WHERE id=?`
-  ).run(merged.name, merged.method, merged.rate, merged.effort, merged.effortUnit ?? merged.effort_unit, merged.percent, computeAmount(merged as any), merged.notes, id);
+    `UPDATE service_calcs SET name=?, method=?, rate=?, effort=?, effort_unit=?, percent=?, percent_base=?, amount=?, notes=? WHERE id=?`
+  ).run(merged.name, merged.method, merged.rate, merged.effort, merged.effortUnit ?? merged.effort_unit, merged.percent, merged.percentBase ?? merged.percent_base ?? "capex", computeAmount(merged as any), merged.notes, id);
   return c.json({ ok: true });
 });
 
@@ -111,12 +120,21 @@ serviceRoutes.post("/:id/push", async (c) => {
 
   let amount = Number(svc.amount);
   if (svc.method === "percent") {
-    const capex = db
-      .prepare("SELECT * FROM costing_items WHERE revision_id = ? AND category = 'Products (CAPEX)'")
-      .all(rev.id) as CostingRow[];
-    const capexSale = capex.map(computeRow).reduce((s, r) => s + r.selling_total_aed, 0);
-    // cost base for a % service is the capex sale value; the service's buy cost
-    amount = (capexSale * Number(svc.percent || 0)) / 100;
+    let baseSale: number;
+    if ((svc.percent_base ?? "capex") === "amc_basis") {
+      // % of all AMC-basis items (new + legacy equipment covered by the AMC)
+      const rows = db
+        .prepare("SELECT * FROM costing_items WHERE revision_id = ? AND is_amc_basis = 1")
+        .all(rev.id) as CostingRow[];
+      baseSale = rows.map(computeRow).reduce((s, r) => s + (r.sell_price_for_summary || r.landed_total_aed), 0);
+    } else {
+      const capex = db
+        .prepare("SELECT * FROM costing_items WHERE revision_id = ? AND category = 'Products (CAPEX)'")
+        .all(rev.id) as CostingRow[];
+      baseSale = capex.map(computeRow).reduce((s, r) => s + r.selling_total_aed, 0);
+    }
+    // cost base for a % service is the chosen sale value; the service's buy cost
+    amount = (baseSale * Number(svc.percent || 0)) / 100;
   }
 
   const res = db

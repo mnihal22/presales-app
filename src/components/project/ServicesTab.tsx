@@ -12,21 +12,23 @@ const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2,
 const METHOD_LABELS: Record<string, string> = {
   fixed: "Fixed lump sum (LOT)",
   rate: "Rate × effort",
-  percent: "% of product total",
+  percent: "% of product / AMC base",
 };
 
 export default function ServicesTab({ projectId, activeRevision }: any) {
   const [services, setServices] = useState<any[]>([]);
   const [capexSale, setCapexSale] = useState(0);
+  const [amcBasisSale, setAmcBasisSale] = useState(0);
   const [open, setOpen] = useState(false);
   const [pushTarget, setPushTarget] = useState<any>(null);
-  const [form, setForm] = useState({ name: "", method: "fixed", rate: "", effort: "", effortUnit: "days", percent: "", amount: "", notes: "" });
+  const [form, setForm] = useState({ name: "", method: "fixed", rate: "", effort: "", effortUnit: "days", percent: "", percentBase: "capex", amount: "", notes: "" });
   const [pushForm, setPushForm] = useState({ category: "Professional Services", marginPct: "25" });
 
   const load = () =>
     api<any>(`/api/services/project/${projectId}`).then((d) => {
       setServices(d.services);
       setCapexSale(d.capexSaleAed);
+      setAmcBasisSale(d.amcBasisSaleAed ?? 0);
     }).catch(console.error);
 
   useEffect(() => { load(); }, [projectId]);
@@ -34,7 +36,8 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
   const computedAmount = () => {
     if (form.method === "fixed") return Number(form.amount) || 0;
     if (form.method === "rate") return (Number(form.rate) || 0) * (Number(form.effort) || 0);
-    return (capexSale * (Number(form.percent) || 0)) / 100;
+    const base = form.percentBase === "amc_basis" ? amcBasisSale : capexSale;
+    return (base * (Number(form.percent) || 0)) / 100;
   };
 
   const create = async () => {
@@ -45,11 +48,12 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
         name: form.name, method: form.method,
         rate: form.rate ? Number(form.rate) : null, effort: form.effort ? Number(form.effort) : null,
         effortUnit: form.effortUnit || null, percent: form.percent ? Number(form.percent) : null,
+        percentBase: form.percentBase,
         amount: Number(form.amount) || 0, notes: form.notes || null,
       }),
     });
     setOpen(false);
-    setForm({ name: "", method: "fixed", rate: "", effort: "", effortUnit: "days", percent: "", amount: "", notes: "" });
+    setForm({ name: "", method: "fixed", rate: "", effort: "", effortUnit: "days", percent: "", percentBase: "capex", amount: "", notes: "" });
     load();
   };
 
@@ -66,7 +70,8 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
     <div className="space-y-4 pt-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Price professional services and AMC here, then push them into the {activeRevision?.label} costing sheet. Product (CAPEX) sale value: <span className="font-medium text-foreground">{fmt(capexSale)} AED</span>
+          Price professional services and AMC here, then push them into the {activeRevision?.label} costing sheet.
+          CAPEX sale: <span className="font-medium text-foreground">{fmt(capexSale)} AED</span> · AMC-base items: <span className="font-medium text-violet-700">{fmt(amcBasisSale)} AED</span>
         </p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild><Button><Plus className="h-4 w-4 mr-1" /> New service calc</Button></DialogTrigger>
@@ -100,8 +105,18 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
                 </div>
               )}
               {form.method === "percent" && (
-                <div><label className="text-sm font-medium">Percent of product (CAPEX) sale value</label>
-                  <Input type="number" value={form.percent} onChange={(e) => setForm({ ...form, percent: e.target.value })} /></div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-sm font-medium">Percent %</label>
+                    <Input type="number" value={form.percent} onChange={(e) => setForm({ ...form, percent: e.target.value })} /></div>
+                  <div><label className="text-sm font-medium">% of</label>
+                    <Select value={form.percentBase} onValueChange={(v) => setForm({ ...form, percentBase: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="capex">Product (CAPEX) sale</SelectItem>
+                        <SelectItem value="amc_basis">AMC-base items value</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                </div>
               )}
               <div><label className="text-sm font-medium">Notes</label>
                 <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
@@ -128,7 +143,7 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
                 <td className="px-4 py-2.5">{METHOD_LABELS[s.method]}</td>
                 <td className="px-4 py-2.5 text-muted-foreground text-xs">
                   {s.method === "rate" && `${fmt(s.rate)} × ${s.effort} ${s.effort_unit || ""}`}
-                  {s.method === "percent" && `${s.percent}% of CAPEX sale`}
+                  {s.method === "percent" && `${s.percent}% of ${(s.percent_base ?? "capex") === "amc_basis" ? "AMC base" : "CAPEX sale"}`}
                   {s.method === "fixed" && "Fixed"}
                 </td>
                 <td className="px-4 py-2.5 text-right">{fmt(s.amount)}</td>

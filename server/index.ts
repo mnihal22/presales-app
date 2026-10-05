@@ -28,6 +28,14 @@ app.onError((err, c) => {
 });
 
 app.get("/api/health", (c) => c.json({ ok: true }));
+app.get("/api/version", (c) => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+    return c.json({ version: pkg.version });
+  } catch {
+    return c.json({ version: "unknown" });
+  }
+});
 app.route("/api/auth", authRoutes);
 app.route("/api/users", userRoutes);
 app.route("/api/customers", customerRoutes);

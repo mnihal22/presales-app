@@ -38,6 +38,7 @@ export interface CostingRow {
   auto_map: string | null;
   apl_unit_price: number | null;
   apl_discount_pct: number;
+  is_amc_basis: number;   // 1 = counts toward the AMC % calculation base
 }
 
 export interface ComputedRow extends CostingRow {
@@ -156,9 +157,18 @@ export interface CategoryTotals {
 }
 
 export function summarize(rows: ComputedRow[]) {
+  // AMC base = sale value of every AMC-basis row (new AND legacy equipment).
+  const amc_basis_sale_aed = rows
+    .filter((r) => r.is_amc_basis)
+    .reduce((s, r) => s + (r.sell_price_for_summary || r.landed_total_aed), 0);
+
+  // Legacy AMC-only rows (amc_basis + not in proposal) carry no sale value in
+  // this proposal — exclude them from the commercial summary entirely.
+  const commercial = rows.filter((r) => !(r.is_amc_basis && !r.in_proposal));
+
   const byCat = new Map<string, ComputedRow[]>();
   for (const cat of SUMMARY_CATEGORIES) byCat.set(cat, []);
-  for (const r of rows) {
+  for (const r of commercial) {
     const cat = SUMMARY_CATEGORIES.includes(r.category as any) ? r.category : "Products (CAPEX)";
     byCat.get(cat)!.push(r);
   }
@@ -179,7 +189,7 @@ export function summarize(rows: ComputedRow[]) {
     gpm: 0,
   };
   total.gpm = total.sale_aed !== 0 ? total.gp_aed / total.sale_aed : 0;
-  return { categories: cats, total };
+  return { categories: cats, total, amc_basis_sale_aed };
 }
 
 // ---------------------------------------------------------------------------

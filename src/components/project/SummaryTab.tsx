@@ -64,6 +64,12 @@ export default function SummaryTab({ revisionId }: { revisionId: number | null }
           </tfoot>
         </table>
       </div>
+      {data.amc_basis_sale_aed > 0 && (
+        <div className="rounded-md border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm">
+          <span className="font-medium text-violet-800">AMC calculation base: {fmt(data.amc_basis_sale_aed)} AED</span>
+          <span className="text-violet-600"> — value of all items flagged "Counts toward AMC base" (new + legacy equipment). Legacy AMC-only items are excluded from the totals above.</span>
+        </div>
+      )}
       <div className="text-xs text-muted-foreground">
         {data.itemCount} costing items · {data.revision.label}. Sale value uses 171H DDP pricing where set, otherwise selling price (landed ÷ (1 − GPM)).
       </div>

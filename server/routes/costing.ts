@@ -58,12 +58,49 @@ const itemSchema = z.object({
   autoMap: z.string().optional().nullable(),
   aplUnitPrice: z.number().min(0).optional().nullable(),
   aplDiscountPct: z.number().min(0).max(100).default(0),
+  isAmcBasis: z.boolean().default(false),
+});
+
+// Patch schema for PUT/bulk — every field optional, NO defaults (zod defaults
+// would silently overwrite untouched fields, e.g. in_proposal back to 1).
+const itemPatchSchema = z.object({
+  category: z.string().optional(),
+  description: z.string().min(1).optional(),
+  vendor: z.string().optional().nullable(),
+  qty: z.number().positive().optional(),
+  unitCost: z.number().min(0).optional(),
+  marginPct: z.number().min(0).max(99).optional(),
+  notes: z.string().optional().nullable(),
+  quoteItemId: z.number().optional().nullable(),
+  sort: z.number().optional(),
+  partNo: z.string().optional().nullable(),
+  bomQty: z.number().positive().optional(),
+  months: z.number().positive().optional(),
+  serviceTerms: z.string().optional().nullable(),
+  listUnitPrice: z.number().min(0).optional().nullable(),
+  partnerDiscountPct: z.number().min(0).max(100).optional(),
+  discountedUnitBuyPrice: z.number().min(0).optional().nullable(),
+  proposalDescription: z.string().optional().nullable(),
+  exchRate: z.number().positive().optional(),
+  landedFactor: z.number().positive().optional(),
+  sellOverride: z.number().min(0).optional().nullable(),
+  isAmc: z.boolean().optional(),
+  isSwSupport: z.boolean().optional(),
+  itemGrouping: z.string().optional().nullable(),
+  productGrouping: z.string().optional().nullable(),
+  offerGrouping: z.string().optional().nullable(),
+  inProposal: z.boolean().optional(),
+  mapNo: z.string().optional().nullable(),
+  autoMap: z.string().optional().nullable(),
+  aplUnitPrice: z.number().min(0).optional().nullable(),
+  aplDiscountPct: z.number().min(0).max(100).optional(),
+  isAmcBasis: z.boolean().optional(),
 });
 
 const INSERT_COLS = `revision_id, quote_item_id, category, description, vendor, qty, unit_cost, margin_pct, notes, sort,
   part_no, bom_qty, months, service_terms, list_unit_price, partner_discount_pct, discounted_unit_buy_price,
   proposal_description, exch_rate, landed_factor, sell_override, is_amc, is_sw_support,
-  item_grouping, product_grouping, offer_grouping, in_proposal, map_no, auto_map, apl_unit_price, apl_discount_pct`;
+  item_grouping, product_grouping, offer_grouping, in_proposal, map_no, auto_map, apl_unit_price, apl_discount_pct, is_amc_basis`;
 
 function itemValues(revisionId: number, d: z.infer<typeof itemSchema>) {
   return [
@@ -71,7 +108,7 @@ function itemValues(revisionId: number, d: z.infer<typeof itemSchema>) {
     d.notes ?? null, d.sort, d.partNo ?? null, d.bomQty, d.months, d.serviceTerms ?? null, d.listUnitPrice ?? null,
     d.partnerDiscountPct, d.discountedUnitBuyPrice ?? null, d.proposalDescription ?? null, d.exchRate, d.landedFactor,
     d.sellOverride ?? null, d.isAmc ? 1 : 0, d.isSwSupport ? 1 : 0, d.itemGrouping ?? null, d.productGrouping ?? null,
-    d.offerGrouping ?? null, d.inProposal ? 1 : 0, d.mapNo ?? null, d.autoMap ?? null, d.aplUnitPrice ?? null, d.aplDiscountPct,
+    d.offerGrouping ?? null, d.inProposal ? 1 : 0, d.mapNo ?? null, d.autoMap ?? null, d.aplUnitPrice ?? null, d.aplDiscountPct, d.isAmcBasis ? 1 : 0,
   ];
 }
 
@@ -104,7 +141,7 @@ costingRoutes.put("/items/:itemId", async (c) => {
   if (error) return c.json({ error: error[1] }, error[0]);
   if (!assertOpen(rev)) return c.json({ error: "revision is locked" }, 409);
 
-  const parsed = itemSchema.partial().safeParse(await c.req.json().catch(() => null));
+  const parsed = itemPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
   const d = parsed.data;
 
@@ -123,6 +160,7 @@ costingRoutes.put("/items/:itemId", async (c) => {
     ["inProposal", d.inProposal === undefined ? undefined : d.inProposal ? 1 : 0, "in_proposal"],
     ["mapNo", d.mapNo, "map_no"], ["autoMap", d.autoMap, "auto_map"],
     ["aplUnitPrice", d.aplUnitPrice, "apl_unit_price"], ["aplDiscountPct", d.aplDiscountPct, "apl_discount_pct"],
+    ["isAmcBasis", d.isAmcBasis === undefined ? undefined : d.isAmcBasis ? 1 : 0, "is_amc_basis"],
   ];
   const sets: string[] = [];
   const vals: any[] = [];
@@ -134,6 +172,63 @@ costingRoutes.put("/items/:itemId", async (c) => {
     db.prepare(`UPDATE costing_items SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
   }
   return c.json({ ok: true });
+});
+
+// --- Bulk update / delete (multi-select in the costing grid) ----------------
+const bulkSchema = z.object({
+  itemIds: z.array(z.number()).min(1).max(5000),
+  fields: itemPatchSchema,
+});
+
+costingRoutes.post("/:revisionId/bulk-update", async (c) => {
+  const revisionId = Number(c.req.param("revisionId"));
+  const user = c.get("user");
+  const { rev, error } = revisionWithAccess(revisionId, user) as any;
+  if (error) return c.json({ error: error[1] }, error[0]);
+  if (!assertOpen(rev)) return c.json({ error: "revision is locked" }, 409);
+
+  const parsed = bulkSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "invalid input" }, 400);
+  const { itemIds, fields: d } = parsed.data;
+
+  const fieldMap: [any, string][] = [
+    [d.category, "category"], [d.vendor, "vendor"], [d.marginPct, "margin_pct"],
+    [d.serviceTerms, "service_terms"], [d.partnerDiscountPct, "partner_discount_pct"],
+    [d.exchRate, "exch_rate"], [d.landedFactor, "landed_factor"],
+    [d.itemGrouping, "item_grouping"], [d.productGrouping, "product_grouping"], [d.offerGrouping, "offer_grouping"],
+    [d.isAmc === undefined ? undefined : d.isAmc ? 1 : 0, "is_amc"],
+    [d.isSwSupport === undefined ? undefined : d.isSwSupport ? 1 : 0, "is_sw_support"],
+    [d.inProposal === undefined ? undefined : d.inProposal ? 1 : 0, "in_proposal"],
+    [d.isAmcBasis === undefined ? undefined : d.isAmcBasis ? 1 : 0, "is_amc_basis"],
+  ];
+  const sets: string[] = [];
+  const vals: any[] = [];
+  for (const [v, col] of fieldMap) {
+    if (v !== undefined) { sets.push(`${col} = ?`); vals.push(v); }
+  }
+  if (!sets.length) return c.json({ error: "no fields to update" }, 400);
+
+  const placeholders = itemIds.map(() => "?").join(",");
+  const res = db
+    .prepare(`UPDATE costing_items SET ${sets.join(", ")} WHERE revision_id = ? AND id IN (${placeholders})`)
+    .run(...vals, revisionId, ...itemIds);
+  logActivity({ projectId: rev.project_id, userId: user.id, action: "costing.bulk_updated", entityType: "revision", entityId: revisionId, details: `${res.changes} items: ${sets.join(", ")}` });
+  return c.json({ ok: true, updated: res.changes });
+});
+
+costingRoutes.post("/:revisionId/bulk-delete", async (c) => {
+  const revisionId = Number(c.req.param("revisionId"));
+  const user = c.get("user");
+  const { rev, error } = revisionWithAccess(revisionId, user) as any;
+  if (error) return c.json({ error: error[1] }, error[0]);
+  if (!assertOpen(rev)) return c.json({ error: "revision is locked" }, 409);
+
+  const parsed = z.object({ itemIds: z.array(z.number()).min(1).max(5000) }).safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "invalid input" }, 400);
+  const placeholders = parsed.data.itemIds.map(() => "?").join(",");
+  const res = db.prepare(`DELETE FROM costing_items WHERE revision_id = ? AND id IN (${placeholders})`).run(revisionId, ...parsed.data.itemIds);
+  logActivity({ projectId: rev.project_id, userId: user.id, action: "costing.bulk_deleted", entityType: "revision", entityId: revisionId, details: `${res.changes} items` });
+  return c.json({ ok: true, deleted: res.changes });
 });
 
 costingRoutes.delete("/items/:itemId", (c) => {
