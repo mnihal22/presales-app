@@ -11,14 +11,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 
 const statusColor: Record<string, string> = {
-  draft: "bg-slate-100 text-slate-700",
-  in_progress: "bg-blue-100 text-blue-700",
+  draft: "bg-muted text-muted-foreground",
+  in_progress: "bg-blue-100 text-blue-700 dark:bg-sky-500/15 dark:text-sky-300",
   in_review: "bg-amber-100 text-amber-700",
-  approved: "bg-emerald-100 text-emerald-700",
+  approved: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
   submitted: "bg-purple-100 text-purple-700",
   won: "bg-green-100 text-green-800",
-  lost: "bg-red-100 text-red-700",
-  cancelled: "bg-slate-100 text-slate-500",
+  lost: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
+  cancelled: "bg-slate-100 text-muted-foreground",
 };
 
 export default function Projects() {
@@ -70,6 +70,7 @@ export default function Projects() {
   const [editDescription, setEditDescription] = useState("");
   const [editCustomerId, setEditCustomerId] = useState<string>("");
   const [editMemberIds, setEditMemberIds] = useState<number[]>([]);
+  const [editRoundUp, setEditRoundUp] = useState(false);
 
   const openEdit = async (p: any) => {
     const d = await api<any>(`/api/projects/${p.id}`);
@@ -78,6 +79,7 @@ export default function Projects() {
     setEditDescription(d.project.description || "");
     setEditCustomerId(d.project.customer_id ? String(d.project.customer_id) : "");
     setEditMemberIds(d.members.map((m: any) => m.id));
+    setEditRoundUp(!!d.project.round_sell_up);
   };
 
   const saveEdit = async () => {
@@ -88,6 +90,7 @@ export default function Projects() {
         description: editDescription || null,
         customerId: editCustomerId ? Number(editCustomerId) : null,
         memberIds: editMemberIds,
+        roundSellUp: editRoundUp,
       }),
     });
     setEditProject(null);
@@ -137,7 +140,7 @@ export default function Projects() {
                     ))}
                   </div>
                 </div>
-                {error && <div className="text-sm text-red-600">{error}</div>}
+                {error && <div className="text-sm text-red-600 dark:text-red-400">{error}</div>}
                 <Button className="w-full" disabled={!name} onClick={create}>Create</Button>
               </div>
             </DialogContent>
@@ -145,9 +148,9 @@ export default function Projects() {
         )}
       </div>
 
-      <div className="rounded-md border bg-white">
+      <div className="rounded-md border bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b bg-slate-50 text-left text-xs uppercase text-muted-foreground">
+          <thead className="border-b bg-muted/60 text-left text-xs uppercase text-muted-foreground">
             <tr>
               <th className="px-4 py-3">Code</th><th className="px-4 py-3">Name</th><th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Owner</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Revs</th>
@@ -160,7 +163,7 @@ export default function Projects() {
               <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No projects yet.</td></tr>
             )}
             {projects.map((p) => (
-              <tr key={p.id} className="border-b last:border-0 hover:bg-slate-50">
+              <tr key={p.id} className="border-b last:border-0 hover:bg-muted/60">
                 <td className="px-4 py-2.5 font-mono text-xs"><Link className="text-blue-600 hover:underline" to={`/projects/${p.id}`}>{p.code}</Link></td>
                 <td className="px-4 py-2.5 font-medium"><Link className="hover:underline" to={`/projects/${p.id}`}>{p.name}</Link></td>
                 <td className="px-4 py-2.5">{p.customer_name || "—"}</td>
@@ -176,7 +179,7 @@ export default function Projects() {
                     </Button>
                     {user?.role === "admin" && (
                       <Button variant="ghost" size="icon" title="Delete project" onClick={() => deleteProject(p)}>
-                        <Trash2 className="h-4 w-4 text-red-600" />
+                        <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
                       </Button>
                     )}
                   </td>

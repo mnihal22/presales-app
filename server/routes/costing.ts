@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { requireAuth, canAccessProject } from "../auth.js";
 import { logActivity } from "../audit.js";
-import { computeRow, summarize, type CostingRow } from "../calc.js";
+import { computeRow, summarize, calcOptsForProject, type CostingRow } from "../calc.js";
 
 export const costingRoutes = new Hono();
 costingRoutes.use("*", requireAuth);
@@ -23,7 +23,7 @@ costingRoutes.get("/:revisionId", (c) => {
 
   const items = (db
     .prepare("SELECT * FROM costing_items WHERE revision_id = ? ORDER BY sort, id")
-    .all(revisionId) as CostingRow[]).map(computeRow);
+    .all(revisionId) as CostingRow[]).map((r) => computeRow(r, calcOptsForProject(rev.project_id)));
   return c.json({ revision: rev, items, summary: summarize(items) });
 });
 
@@ -59,6 +59,9 @@ const itemSchema = z.object({
   aplUnitPrice: z.number().min(0).optional().nullable(),
   aplDiscountPct: z.number().min(0).max(100).default(0),
   isAmcBasis: z.boolean().default(false),
+  mpgCode: z.string().optional().nullable(),
+  rowColor: z.string().optional().nullable(),
+  discSellOverride: z.number().min(0).optional().nullable(),
 });
 
 // Patch schema for PUT/bulk — every field optional, NO defaults (zod defaults
@@ -95,12 +98,16 @@ const itemPatchSchema = z.object({
   aplUnitPrice: z.number().min(0).optional().nullable(),
   aplDiscountPct: z.number().min(0).max(100).optional(),
   isAmcBasis: z.boolean().optional(),
+  mpgCode: z.string().optional().nullable(),
+  rowColor: z.string().optional().nullable(),
+  discSellOverride: z.number().min(0).optional().nullable(),
 });
 
 const INSERT_COLS = `revision_id, quote_item_id, category, description, vendor, qty, unit_cost, margin_pct, notes, sort,
   part_no, bom_qty, months, service_terms, list_unit_price, partner_discount_pct, discounted_unit_buy_price,
   proposal_description, exch_rate, landed_factor, sell_override, is_amc, is_sw_support,
-  item_grouping, product_grouping, offer_grouping, in_proposal, map_no, auto_map, apl_unit_price, apl_discount_pct, is_amc_basis`;
+  item_grouping, product_grouping, offer_grouping, in_proposal, map_no, auto_map, apl_unit_price, apl_discount_pct, is_amc_basis,
+  mpg_code, row_color, disc_sell_override`;
 
 function itemValues(revisionId: number, d: z.infer<typeof itemSchema>) {
   return [
@@ -109,6 +116,7 @@ function itemValues(revisionId: number, d: z.infer<typeof itemSchema>) {
     d.partnerDiscountPct, d.discountedUnitBuyPrice ?? null, d.proposalDescription ?? null, d.exchRate, d.landedFactor,
     d.sellOverride ?? null, d.isAmc ? 1 : 0, d.isSwSupport ? 1 : 0, d.itemGrouping ?? null, d.productGrouping ?? null,
     d.offerGrouping ?? null, d.inProposal ? 1 : 0, d.mapNo ?? null, d.autoMap ?? null, d.aplUnitPrice ?? null, d.aplDiscountPct, d.isAmcBasis ? 1 : 0,
+    d.mpgCode ?? null, d.rowColor ?? null, d.discSellOverride ?? null,
   ];
 }
 
@@ -161,6 +169,7 @@ costingRoutes.put("/items/:itemId", async (c) => {
     ["mapNo", d.mapNo, "map_no"], ["autoMap", d.autoMap, "auto_map"],
     ["aplUnitPrice", d.aplUnitPrice, "apl_unit_price"], ["aplDiscountPct", d.aplDiscountPct, "apl_discount_pct"],
     ["isAmcBasis", d.isAmcBasis === undefined ? undefined : d.isAmcBasis ? 1 : 0, "is_amc_basis"],
+    ["mpgCode", d.mpgCode, "mpg_code"], ["rowColor", d.rowColor, "row_color"], ["discSellOverride", d.discSellOverride, "disc_sell_override"],
   ];
   const sets: string[] = [];
   const vals: any[] = [];
@@ -200,6 +209,7 @@ costingRoutes.post("/:revisionId/bulk-update", async (c) => {
     [d.isSwSupport === undefined ? undefined : d.isSwSupport ? 1 : 0, "is_sw_support"],
     [d.inProposal === undefined ? undefined : d.inProposal ? 1 : 0, "in_proposal"],
     [d.isAmcBasis === undefined ? undefined : d.isAmcBasis ? 1 : 0, "is_amc_basis"],
+    [d.mpgCode, "mpg_code"], [d.rowColor, "row_color"], [d.discSellOverride, "disc_sell_override"],
   ];
   const sets: string[] = [];
   const vals: any[] = [];

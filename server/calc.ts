@@ -5,6 +5,8 @@
 // margin_pct is GPM (gross profit margin on the SELLING price).
 // ---------------------------------------------------------------------------
 
+import { db } from "./db.js";
+
 export interface CostingRow {
   id: number;
   revision_id: number;
@@ -39,6 +41,9 @@ export interface CostingRow {
   apl_unit_price: number | null;
   apl_discount_pct: number;
   is_amc_basis: number;   // 1 = counts toward the AMC % calculation base
+  mpg_code: string | null; // vendor MPG / product category code (optional)
+  row_color: string | null;      // row highlight color key (display only)
+  disc_sell_override: number | null; // discounted-offer sell unit (AED), overrides the discounted chain
 }
 
 export interface ComputedRow extends CostingRow {
@@ -68,7 +73,23 @@ export interface ComputedRow extends CostingRow {
 
 const n = (v: number | null | undefined, d = 0) => (v == null || Number.isNaN(v) ? d : Number(v));
 
-export function computeRow(r: CostingRow): ComputedRow {
+export interface CalcOpts {
+  roundUp?: boolean; // Excel sheet behavior: ROUNDUP sell price to whole AED (2dp if < 1)
+}
+
+// Resolves the per-project rounding setting.
+export function calcOptsForProject(projectId: number): CalcOpts {
+  const p = db.prepare("SELECT round_sell_up FROM projects WHERE id = ?").get(projectId) as any;
+  return { roundUp: !!p?.round_sell_up };
+}
+
+// Excel: =IF(unit<1, ROUNDUP(x,2), ROUNDUP(x,0))
+export function roundSellUp(x: number): number {
+  if (x < 1) return Math.ceil(x * 100) / 100;
+  return Math.ceil(x);
+}
+
+export function computeRow(r: CostingRow, opts: CalcOpts = {}): ComputedRow {
   const basis = n(r.qty, 1) * n(r.bom_qty, 1) * n(r.months, 1);
   const list = n(r.list_unit_price);
   const buy = n(r.unit_cost);
@@ -85,20 +106,29 @@ export function computeRow(r: CostingRow): ComputedRow {
   const landed_unit_aed = buy * exch * lf;
   const landed_total_aed = landed_unit_aed * basis;
 
-  const selling_unit_aed = r.sell_override != null ? n(r.sell_override) : gpm >= 1 ? 0 : landed_unit_aed / (1 - gpm);
+  let selling_unit_aed = r.sell_override != null ? n(r.sell_override) : gpm >= 1 ? 0 : landed_unit_aed / (1 - gpm);
+  if (opts.roundUp && r.sell_override == null) selling_unit_aed = roundSellUp(selling_unit_aed);
   const selling_total_aed = selling_unit_aed * basis;
   const gp_aed = selling_total_aed - landed_total_aed;
   const gpm_actual = selling_total_aed !== 0 ? gp_aed / selling_total_aed : 0;
 
-  // Discounted offer area (uses discounted buy price, same GPM)
+  // Discounted offer area. Two independent levers, never touching the standard
+  // offer: a direct discounted sell override (AED/unit), or a discounted buy
+  // price re-run through the same landed/GPM chain.
   let disc_landed_unit_aed: number | null = null;
   let disc_landed_total_aed: number | null = null;
   let disc_selling_unit_aed: number | null = null;
   let disc_selling_total_aed: number | null = null;
-  if (discBuy != null) {
+  if (r.disc_sell_override != null) {
+    disc_selling_unit_aed = n(r.disc_sell_override);
+    disc_selling_total_aed = disc_selling_unit_aed * basis;
+    disc_landed_unit_aed = landed_unit_aed;
+    disc_landed_total_aed = landed_total_aed;
+  } else if (discBuy != null) {
     disc_landed_unit_aed = discBuy * exch * lf;
     disc_landed_total_aed = disc_landed_unit_aed * basis;
     disc_selling_unit_aed = gpm >= 1 ? 0 : disc_landed_unit_aed / (1 - gpm);
+    if (opts.roundUp) disc_selling_unit_aed = roundSellUp(disc_selling_unit_aed);
     disc_selling_total_aed = disc_selling_unit_aed * basis;
   }
 
@@ -189,7 +219,19 @@ export function summarize(rows: ComputedRow[]) {
     gpm: 0,
   };
   total.gpm = total.sale_aed !== 0 ? total.gp_aed / total.sale_aed : 0;
-  return { categories: cats, total, amc_basis_sale_aed };
+
+  // Template-style split: product rows flagged "SW support" are reported
+  // separately as Support Subscription revenue (matches the xlsm Summary tab).
+  const productish = commercial.filter((r) =>
+    r.category === "Products (CAPEX)" || r.category === "Subscriptions & Support (OPEX)");
+  const support_subscription_sale_aed = productish
+    .filter((r) => r.is_sw_support)
+    .reduce((s, r) => s + r.sell_price_for_summary, 0);
+  const products_sale_aed = productish
+    .filter((r) => !r.is_sw_support)
+    .reduce((s, r) => s + r.sell_price_for_summary, 0);
+
+  return { categories: cats, total, amc_basis_sale_aed, products_sale_aed, support_subscription_sale_aed };
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { requireAuth, canAccessProject } from "../auth.js";
 import { logActivity } from "../audit.js";
+import { computeRow, calcOptsForProject, type CostingRow } from "../calc.js";
 
 export const optionRoutes = new Hono();
 optionRoutes.use("*", requireAuth);
@@ -31,6 +32,9 @@ const schema = z.object({
   description: z.string().optional().nullable(),
   templateId: z.number().optional().nullable(),
   itemIds: z.array(z.number()).default([]),
+  discountMode: z.boolean().optional(),
+  currency: z.enum(["AED", "USD"]).optional(),
+  discountDisplay: z.enum(["lumpsum", "line_item"]).optional(),
 });
 
 optionRoutes.post("/", async (c) => {
@@ -42,8 +46,8 @@ optionRoutes.post("/", async (c) => {
 
   const tx = db.transaction(() => {
     const res = db
-      .prepare("INSERT INTO proposal_options (project_id, revision_id, name, description, template_id, created_by) VALUES (?,?,?,?,?,?)")
-      .run(d.projectId, d.revisionId, d.name, d.description ?? null, d.templateId ?? null, user.id);
+      .prepare("INSERT INTO proposal_options (project_id, revision_id, name, description, template_id, discount_mode, currency, discount_display, created_by) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(d.projectId, d.revisionId, d.name, d.description ?? null, d.templateId ?? null, d.discountMode ? 1 : 0, d.currency ?? "AED", d.discountDisplay ?? "lumpsum", user.id);
     const optionId = Number(res.lastInsertRowid);
     for (const itemId of d.itemIds) {
       db.prepare("INSERT OR IGNORE INTO option_items (option_id, costing_item_id) VALUES (?,?)").run(optionId, itemId);
@@ -78,6 +82,9 @@ optionRoutes.put("/:id", async (c) => {
   if (d.name) db.prepare("UPDATE proposal_options SET name = ? WHERE id = ?").run(d.name, id);
   if (d.description !== undefined) db.prepare("UPDATE proposal_options SET description = ? WHERE id = ?").run(d.description ?? null, id);
   if (d.templateId !== undefined) db.prepare("UPDATE proposal_options SET template_id = ? WHERE id = ?").run(d.templateId ?? null, id);
+  if (d.discountMode !== undefined) db.prepare("UPDATE proposal_options SET discount_mode = ? WHERE id = ?").run(d.discountMode ? 1 : 0, id);
+  if (d.currency !== undefined) db.prepare("UPDATE proposal_options SET currency = ? WHERE id = ?").run(d.currency, id);
+  if (d.discountDisplay !== undefined) db.prepare("UPDATE proposal_options SET discount_display = ? WHERE id = ?").run(d.discountDisplay, id);
   if (d.itemIds) {
     db.prepare("DELETE FROM option_items WHERE option_id = ?").run(id);
     for (const itemId of d.itemIds) {
@@ -86,6 +93,74 @@ optionRoutes.put("/:id", async (c) => {
   }
   logActivity({ projectId: opt.project_id, userId: user.id, action: "option.updated", entityType: "proposal_option", entityId: id, details: d.name });
   return c.json({ ok: true });
+});
+
+// Reverse-engineer a uniform GPM from a target total sale value for the option.
+// Rows with fixed pricing (sell override or 171H/APL-DDP) don't move; the GPM
+// is solved against the remaining free rows: target = fixedSale + landedFree/(1−GPM).
+optionRoutes.post("/:id/target-gpm", async (c) => {
+  const id = Number(c.req.param("id"));
+  const opt = db.prepare("SELECT * FROM proposal_options WHERE id = ?").get(id) as any;
+  if (!opt) return c.json({ error: "not found" }, 404);
+  const user = c.get("user");
+  if (!canAccessProject(user, opt.project_id)) return c.json({ error: "forbidden" }, 403);
+
+  const parsed = z.object({ targetSale: z.number().positive(), apply: z.boolean().optional() })
+    .safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "invalid input" }, 400);
+  const { targetSale, apply } = parsed.data;
+
+  const rows = (db
+    .prepare(
+      `SELECT ci.* FROM costing_items ci
+       JOIN option_items oi ON oi.costing_item_id = ci.id
+       WHERE oi.option_id = ? ORDER BY ci.sort, ci.id`
+    )
+    .all(id) as CostingRow[]).map((r) => computeRow(r, calcOptsForProject(opt.project_id)));
+
+  // legacy AMC-only rows carry no sale value in the proposal — ignore them
+  const commercial = rows.filter((r) => !(r.is_amc_basis && !r.in_proposal));
+  const isFixed = (r: CostingRow) => r.sell_override != null || r.apl_unit_price != null;
+  const fixed = commercial.filter(isFixed);
+  const free = commercial.filter((r) => !isFixed(r));
+
+  const currentSale = commercial.reduce((s, r) => s + r.sell_price_for_summary, 0);
+  const fixedSale = fixed.reduce((s, r) => s + r.sell_price_for_summary, 0);
+  const landedFree = free.reduce((s, r) => s + r.landed_total_aed, 0);
+
+  const room = targetSale - fixedSale;
+  if (room <= 0) return c.json({ error: "Target is at or below the fixed-price rows' total — no GPM can achieve it." }, 400);
+  if (free.length === 0) return c.json({ error: "Every row in this option has fixed pricing (sell override or APL/DDP) — nothing to adjust." }, 400);
+  const impliedGpm = 1 - landedFree / room;
+  if (impliedGpm < 0) return c.json({ error: `Target is below the landed cost of the adjustable rows (${Math.round(landedFree).toLocaleString()} AED).`, currentSale, fixedSale, landedFree }, 400);
+
+  const result: any = {
+    currentSale, fixedSale, landedFree,
+    freeCount: free.length, fixedCount: fixed.length,
+    impliedGpmPct: impliedGpm * 100,
+  };
+
+  if (apply) {
+    const rev = db.prepare("SELECT * FROM revisions WHERE id = ?").get(opt.revision_id) as any;
+    if (!rev || rev.status !== "open") return c.json({ error: "revision is locked — unlock it to apply a target GPM" }, 409);
+    const stmt = db.prepare("UPDATE costing_items SET margin_pct = ? WHERE id = ?");
+    const tx = db.transaction(() => { for (const r of free) stmt.run(impliedGpm * 100, r.id); });
+    tx();
+    logActivity({ projectId: opt.project_id, userId: user.id, action: "option.target_gpm_applied", entityType: "proposal_option", entityId: id, details: `${opt.name}: GPM ${(impliedGpm * 100).toFixed(2)}% on ${free.length} rows toward target ${targetSale}` });
+    // recompute to show the achieved total (rounding may shift it slightly)
+    const after = (db
+      .prepare(
+        `SELECT ci.* FROM costing_items ci
+         JOIN option_items oi ON oi.costing_item_id = ci.id
+         WHERE oi.option_id = ?`
+      )
+      .all(id) as CostingRow[]).map((r) => computeRow(r, calcOptsForProject(opt.project_id)))
+      .filter((r) => !(r.is_amc_basis && !r.in_proposal));
+    result.applied = true;
+    result.achievedSale = after.reduce((s, r) => s + r.sell_price_for_summary, 0);
+  }
+
+  return c.json(result);
 });
 
 optionRoutes.delete("/:id", (c) => {

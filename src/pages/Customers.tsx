@@ -45,9 +45,9 @@ export default function Customers() {
           </Dialog>
         )}
       </div>
-      <div className="rounded-md border bg-white">
+      <div className="rounded-md border bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b bg-slate-50 text-left text-xs uppercase text-muted-foreground">
+          <thead className="border-b bg-muted/60 text-left text-xs uppercase text-muted-foreground">
             <tr><th className="px-4 py-3">Name</th><th className="px-4 py-3">Entity</th><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Projects</th></tr>
           </thead>
           <tbody>

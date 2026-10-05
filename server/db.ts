@@ -241,6 +241,104 @@ addColumnIfMissing("costing_items", "is_amc_basis", "is_amc_basis INTEGER NOT NU
 addColumnIfMissing("service_calcs", "percent_base", "percent_base TEXT NOT NULL DEFAULT 'capex'"); // capex | amc_basis
 addColumnIfMissing("costing_items", "apl_unit_price", "apl_unit_price REAL");      // 171H: APL unit price in AED
 addColumnIfMissing("costing_items", "apl_discount_pct", "apl_discount_pct REAL NOT NULL DEFAULT 0"); // 171H: extended discount on APL
+addColumnIfMissing("costing_items", "mpg_code", "mpg_code TEXT");                  // vendor MPG/product category code (optional)
+addColumnIfMissing("costing_items", "row_color", "row_color TEXT");                // human eye-candy row highlight (yellow/green/red/blue/violet/orange)
+addColumnIfMissing("costing_items", "disc_sell_override", "disc_sell_override REAL"); // discounted-offer sell unit AED — independent of standard offer
+addColumnIfMissing("proposal_options", "discount_display", "discount_display TEXT NOT NULL DEFAULT 'lumpsum'"); // lumpsum | line_item
+addColumnIfMissing("projects", "round_sell_up", "round_sell_up INTEGER NOT NULL DEFAULT 0"); // 1 = ROUNDUP sell to whole AED (Excel sheet behavior)
+addColumnIfMissing("revisions", "locked_by", "locked_by INTEGER REFERENCES users(id)");
+addColumnIfMissing("proposal_options", "discount_mode", "discount_mode INTEGER NOT NULL DEFAULT 0"); // 1 = use discounted buy chain
+addColumnIfMissing("proposal_options", "currency", "currency TEXT NOT NULL DEFAULT 'AED'"); // AED | USD
+
+// ---------------------------------------------------------------------------
+// Global reusable masters (helpers, never mandatory):
+//  - service rate card (man-day rates by code)
+//  - support types → default AMC %
+//  - vendor MPG discount tables (171H APL discount by MPG code)
+// ---------------------------------------------------------------------------
+db.exec(`
+CREATE TABLE IF NOT EXISTS rate_card (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  code        TEXT NOT NULL UNIQUE,   -- e.g. InstBH
+  description TEXT,
+  rate_aed    REAL NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS support_types (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL UNIQUE,   -- e.g. "8 x 5 onsite with spare"
+  amc_pct     REAL NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Per-module role overrides: granular access per app module.
+-- role: admin (full control incl. unlock/delete), manager (create/edit/assign),
+--       member (work on assigned), viewer (read-only)
+CREATE TABLE IF NOT EXISTS module_roles (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  module  TEXT NOT NULL,              -- 'presales', future modules plug in here
+  role    TEXT NOT NULL CHECK (role IN ('admin','manager','member','viewer')),
+  UNIQUE (user_id, module)
+);
+
+CREATE TABLE IF NOT EXISTS mpg_discounts (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  vendor       TEXT NOT NULL,         -- free text, manually chosen
+  mpg          TEXT NOT NULL,         -- e.g. 1P, 2S
+  category     TEXT,
+  type         TEXT,
+  discount_pct REAL NOT NULL DEFAULT 0,  -- % discount on APL (171H)
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (vendor, mpg)
+);
+`);
+
+// Seed masters from the standard sheet conventions (only if empty)
+if ((db.prepare("SELECT COUNT(*) c FROM rate_card").get() as any).c === 0) {
+  const ins = db.prepare("INSERT INTO rate_card (code, description, rate_aed) VALUES (?,?,?)");
+  const rates: [string, string, number][] = [
+    ["InstBH", "Installation during business hours per man day", 2000],
+    ["InstNBH", "Installation during non-working hours per man day", 2750],
+    ["InstBHMNC", "Installation business hours per man day (MNC)", 2208],
+    ["InstNBHMNC", "Installation non-working hours per man day (MNC)", 2944],
+    ["SupContC-Hr", "Support out of bundle per man hour (contracted)", 400],
+    ["SupNoC-Hr", "Non-contract installation/support per man hour", 600],
+    ["SupNoC-MD", "Non-contract installation/support per man day", 3000],
+    ["SupNoCMNC-MD", "Non-contract support per man day (MNC)", 3312],
+    ["AppDev", "Application development per man day", 3500],
+    ["AppDevMNC", "Application development per man day (MNC)", 3680],
+  ];
+  for (const r of rates) ins.run(...r);
+}
+if ((db.prepare("SELECT COUNT(*) c FROM support_types").get() as any).c === 0) {
+  const ins = db.prepare("INSERT INTO support_types (name, amc_pct) VALUES (?,?)");
+  const types: [string, number][] = [
+    ["8 x 5 onsite without spare", 8],
+    ["8 x 5 remote without spare", 8],
+    ["8 x 5 onsite with spare", 12],
+    ["24 x 7 onsite without spare", 10],
+    ["24 x 7 onsite with spare", 15],
+  ];
+  for (const t of types) ins.run(...t);
+}
+if ((db.prepare("SELECT COUNT(*) c FROM mpg_discounts").get() as any).c === 0) {
+  const ins = db.prepare("INSERT INTO mpg_discounts (vendor, mpg, category, type, discount_pct) VALUES (?,?,?,?,?)");
+  const mpgs: [string, string, string, string, number][] = [
+    ["Avaya", "1P", "Product", "Hardware", 62],
+    ["Avaya", "2P", "Product", "Software", 67],
+    ["Avaya", "3P", "Product", "Peripherals", 59],
+    ["Avaya", "4P", "Product", "Hardware-2", 55],
+    ["Avaya", "5P", "Product", "Software-2", 46],
+    ["Avaya", "7P", "Product", "OEM Products", 17],
+    ["Avaya", "8P", "Product", "Video Solutions", 42],
+    ["Avaya", "9P", "Product", "SME Solutions", 51],
+    ["Avaya", "1S", "Services", "Support Services", 20],
+    ["Avaya", "2S", "Services", "Professional Services", -3],
+  ];
+  for (const m of mpgs) ins.run(...m);
+}
 
 // ---------------------------------------------------------------------------
 // Seed: default admin + default proposal template (placeholder, to be

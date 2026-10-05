@@ -16,14 +16,14 @@ import TasksTab from "@/components/project/TasksTab";
 import ActivityTab from "@/components/project/ActivityTab";
 
 const statusColor: Record<string, string> = {
-  draft: "bg-slate-100 text-slate-700",
-  in_progress: "bg-blue-100 text-blue-700",
+  draft: "bg-muted text-muted-foreground",
+  in_progress: "bg-blue-100 text-blue-700 dark:bg-sky-500/15 dark:text-sky-300",
   in_review: "bg-amber-100 text-amber-700",
-  approved: "bg-emerald-100 text-emerald-700",
+  approved: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
   submitted: "bg-purple-100 text-purple-700",
   won: "bg-green-100 text-green-800",
-  lost: "bg-red-100 text-red-700",
-  cancelled: "bg-slate-100 text-slate-500",
+  lost: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
+  cancelled: "bg-slate-100 text-muted-foreground",
 };
 
 export default function ProjectDetail() {

@@ -72,7 +72,7 @@ export async function requireAuth(c: Context, next: Next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return c.json({ error: "unauthorized" }, 401);
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: number };
+    const payload = jwt.verify(token, JWT_SECRET) as unknown as { sub: number };
     const row = db
       .prepare("SELECT id, username, display_name, email, role FROM users WHERE id = ? AND active = 1")
       .get(payload.sub) as any;
@@ -101,8 +101,38 @@ export function requireRole(...roles: Role[]) {
 /** Admins and sales can see all projects; presales only projects they are a member of. */
 export function canAccessProject(user: AuthUser, projectId: number): boolean {
   if (user.role === "admin" || user.role === "sales") return true;
+  const mr = getModuleRole(user, "presales");
+  if (mr === "admin" || mr === "manager") return true;
   const row = db
     .prepare("SELECT 1 AS ok FROM project_members WHERE project_id = ? AND user_id = ?")
     .get(projectId, user.id);
   return !!row;
+}
+
+// ---------------------------------------------------------------------------
+// Per-module roles (granular access). Global 'admin' is admin of every module.
+// Module roles: admin > manager > member > viewer
+// ---------------------------------------------------------------------------
+export type ModuleRole = "admin" | "manager" | "member" | "viewer";
+const MODULE_RANK: Record<ModuleRole, number> = { admin: 3, manager: 2, member: 1, viewer: 0 };
+
+export function getModuleRole(user: AuthUser, module: string): ModuleRole | null {
+  if (user.role === "admin") return "admin";
+  // Sensible defaults from the global role when no override exists
+  const row = db.prepare("SELECT role FROM module_roles WHERE user_id = ? AND module = ?").get(user.id, module) as any;
+  if (row) return row.role as ModuleRole;
+  if (user.role === "sales") return "manager";
+  return "member"; // presales default
+}
+
+export function moduleRoleAtLeast(user: AuthUser, module: string, min: ModuleRole): boolean {
+  const r = getModuleRole(user, module);
+  return r !== null && MODULE_RANK[r] >= MODULE_RANK[min];
+}
+
+/** Who may unlock a locked revision: global admin, presales-module admin, or the user who locked it. */
+export function canUnlockRevision(user: AuthUser, rev: any): boolean {
+  if (user.role === "admin") return true;
+  if (moduleRoleAtLeast(user, "presales", "admin")) return true;
+  return rev.locked_by != null && rev.locked_by === user.id;
 }

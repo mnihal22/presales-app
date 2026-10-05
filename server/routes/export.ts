@@ -2,15 +2,13 @@ import { Hono } from "hono";
 import { db } from "../db.js";
 import { requireAuth, canAccessProject } from "../auth.js";
 import { logActivity } from "../audit.js";
-import { computeRow, amountInWords, type CostingRow, type ComputedRow } from "../calc.js";
+import { computeRow, amountInWords, calcOptsForProject, type CostingRow, type ComputedRow } from "../calc.js";
 import ExcelJS from "exceljs";
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, HeadingLevel } from "docx";
 import PDFDocument from "pdfkit";
 
 export const exportRoutes = new Hono();
 exportRoutes.use("*", requireAuth);
-
-const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // Section display labels, in proposal order
 const SECTION_LABELS: [string, string][] = [
@@ -60,16 +58,43 @@ function getTemplateConfig(templateId?: number): TemplateConfig {
   };
 }
 
+// One proposal line = one Map# group (rows sharing a Map# merge; unique Map#
+// or blank = its own line), matching the Excel VLOOKUP(Map#&"Y") behavior.
+interface ProposalLine {
+  mapNo: string;           // shown as the item number when present
+  description: string;
+  partNo: string;
+  mpg: string;
+  qtyText: string;
+  qty: number;
+  unit: number;            // display currency
+  total: number;           // display currency
+  aplUnit: number | null;
+  aplDiscPct: number;
+  ddpUnit: number | null;
+  ddpTotal: number | null;
+  category: string;
+}
+
 interface ProposalData {
   project: any;
   revision: any;
   option?: any;
-  sections: { label: string; rows: ComputedRow[] }[];
+  sections: { label: string; rows: ProposalLine[] }[];
   totalSale: number;
   discountedTotal: number;
   vatAmount: number;
   grandTotal: number;
+  currency: string;         // AED | USD
+  currencyLabel: string;
+  currencyMinor: string;
+  discountMode: boolean;
+  discountDisplay: string;  // lumpsum | line_item
+  optionDiscount: number;   // display currency; >0 only when lumpsum discount applies
+  fmtMoney: (v: number) => string;
 }
+
+const USD_RATE = 3.68;
 
 function buildProposalData(revisionId: number, optionId: number | undefined, cfg: TemplateConfig): ProposalData | null {
   const revision = db.prepare("SELECT * FROM revisions WHERE id = ?").get(revisionId) as any;
@@ -90,7 +115,7 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
     rows = db
       .prepare(
         `SELECT ci.* FROM costing_items ci JOIN option_items oi ON oi.costing_item_id = ci.id
-         WHERE oi.option_id = ? AND ci.in_proposal = 1 AND NOT (ci.is_amc_basis = 1 AND ci.in_proposal = 0) ORDER BY ci.sort, ci.id`
+         WHERE oi.option_id = ? AND ci.in_proposal = 1 ORDER BY ci.sort, ci.id`
       )
       .all(optionId) as CostingRow[];
   } else {
@@ -98,19 +123,80 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
       .prepare("SELECT * FROM costing_items WHERE revision_id = ? AND in_proposal = 1 ORDER BY sort, id")
       .all(revisionId) as CostingRow[];
   }
-  const computed = rows.map(computeRow);
+  const opts = calcOptsForProject(revision.project_id);
+  const computed = rows.map((r) => computeRow(r, opts));
+
+  const discountMode = !!option?.discount_mode;
+  const discountDisplay = option?.discount_display === "line_item" ? "line_item" : "lumpsum";
+  const currency = option?.currency === "USD" ? "USD" : "AED";
+  const curFactor = currency === "USD" ? USD_RATE : 1;
+  const dp = currency === "USD" ? 0 : 2;
+  const fmtMoney = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+
+  // Standard vs discounted sell per row. Discount mode with "line_item" display
+  // prices every line at its discounted value; "lumpsum" keeps lines at the
+  // standard offer and shows one discount amount at the bottom.
+  const stdTotal = (r: ComputedRow) => r.sell_price_for_summary;
+  const discTotal = (r: ComputedRow) => r.disc_selling_total_aed ?? r.sell_price_for_summary;
+  const lineItemDiscount = discountMode && discountDisplay === "line_item";
+  const effTotal = (r: ComputedRow) => (lineItemDiscount ? discTotal(r) : stdTotal(r));
+
+  // --- aggregate rows into proposal lines by Map# ---
+  const groups = new Map<string, ComputedRow[]>();
+  for (const r of computed) {
+    const key = (r.map_no && r.map_no.trim()) || `#${r.id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+  const lines: ProposalLine[] = [];
+  let discountedSumAed = 0;
+  for (const [key, g] of groups) {
+    const rep = g[0];
+    const totalAed = g.reduce((s, r) => s + effTotal(r), 0);
+    discountedSumAed += g.reduce((s, r) => s + discTotal(r), 0);
+    const ddpTotalAed = g.some((r) => r.ddp_total_aed != null) ? g.reduce((s, r) => s + (r.ddp_total_aed ?? 0), 0) : null;
+    const qty = rep.qty || 1;
+    // USD proposals carry integer totals (template convention); AED keeps 2dp
+    const total = dp === 0 ? Math.round(totalAed / curFactor) : totalAed / curFactor;
+    const ddpTotal = ddpTotalAed != null ? (dp === 0 ? Math.round(ddpTotalAed / curFactor) : ddpTotalAed / curFactor) : null;
+    lines.push({
+      mapNo: key.startsWith("#") ? "" : key,
+      description: rep.proposal_description || rep.description,
+      partNo: rep.part_no || "",
+      mpg: rep.mpg_code || "",
+      qtyText: rep.months > 1 ? `${rep.qty} × ${rep.months}mo` : String(rep.qty),
+      qty,
+      unit: qty ? total / qty : total,
+      total,
+      aplUnit: rep.apl_unit_price != null ? rep.apl_unit_price / curFactor : null,
+      aplDiscPct: rep.apl_discount_pct || 0,
+      ddpUnit: ddpTotal != null && qty ? ddpTotal / qty : null,
+      ddpTotal,
+      category: rep.category,
+    });
+  }
 
   const sections = SECTION_LABELS.map(([cat, label]) => ({
     label,
-    rows: computed.filter((r) => r.category === cat || (!SECTION_LABELS.some(([cc]) => cc === r.category) && cat === "Products (CAPEX)")),
+    rows: lines.filter((r) => r.category === cat || (!SECTION_LABELS.some(([cc]) => cc === r.category) && cat === "Products (CAPEX)")),
   })).filter((s) => s.rows.length > 0);
 
-  const totalSale = computed.reduce((s, r) => s + r.sell_price_for_summary, 0);
-  const discountedTotal = cfg.showSpecialDiscount ? totalSale * (1 - cfg.specialDiscountPct / 100) : totalSale;
-  const vatAmount = (discountedTotal * cfg.vatPct) / 100;
-  const grandTotal = discountedTotal + vatAmount;
+  const totalSale = lines.reduce((s, r) => s + r.total, 0);
+  // Lump-sum option discount: difference between standard and discounted offer,
+  // shown as one discount line. (Line-item mode already priced lines discounted.)
+  const optionDiscount = discountMode && discountDisplay === "lumpsum"
+    ? Math.max(0, totalSale - (dp === 0 ? Math.round(discountedSumAed / curFactor) : discountedSumAed / curFactor))
+    : 0;
+  const afterOptionDiscount = totalSale - optionDiscount;
+  const r0 = (v: number) => (dp === 0 ? Math.round(v) : v); // whole-dollar totals for USD
+  const discountedTotal = r0(cfg.showSpecialDiscount ? afterOptionDiscount * (1 - cfg.specialDiscountPct / 100) : afterOptionDiscount);
+  const vatAmount = r0((discountedTotal * cfg.vatPct) / 100);
+  const grandTotal = r0(discountedTotal + vatAmount);
 
-  return { project, revision, option, sections, totalSale, discountedTotal, vatAmount, grandTotal };
+  const currencyLabel = currency === "USD" ? "US Dollars" : cfg.currencyLabel;
+  const currencyMinor = currency === "USD" ? "Cents" : cfg.currencyMinor;
+
+  return { project, revision, option, sections, totalSale, discountedTotal, vatAmount, grandTotal, currency, currencyLabel, currencyMinor, discountMode, discountDisplay, optionDiscount, fmtMoney };
 }
 
 // Column definitions per layout
@@ -118,27 +204,25 @@ function layoutColumns(layout: LayoutId) {
   if (layout === "item_code")
     return {
       headers: ["Item", "Item Code", "Description", "Unit Price", "Qty", "Total Price"],
-      values: (r: ComputedRow, idx: string) => [idx, r.part_no || "", r.proposal_description || r.description, fmt(r.selling_unit_aed), qtyStr(r), fmt(r.selling_total_aed)],
+      values: (r: ProposalLine, idx: string, f: (v: number) => string) => [r.mapNo || idx, r.partNo, r.description, f(r.unit), r.qtyText, f(r.total)],
     };
   if (layout === "apl")
     return {
       headers: ["Item", "MPG", "Description", "APL Unit Price", "Disc. on APL %", "DDP Unit Price", "Qty", "DDP Total Price"],
-      values: (r: ComputedRow, idx: string) => [
-        idx, r.part_no || "", r.proposal_description || r.description,
-        r.apl_unit_price != null ? fmt(r.apl_unit_price) : "NA",
-        r.apl_discount_pct ? `${r.apl_discount_pct}%` : "-",
-        r.ddp_unit_aed != null ? fmt(r.ddp_unit_aed) : "NA",
-        qtyStr(r),
-        fmt(r.ddp_total_aed ?? r.selling_total_aed),
+      values: (r: ProposalLine, idx: string, f: (v: number) => string) => [
+        r.mapNo || idx, r.mpg || r.partNo, r.description,
+        r.aplUnit != null ? f(r.aplUnit) : "NA",
+        r.aplDiscPct ? `${r.aplDiscPct}%` : "-",
+        r.ddpUnit != null ? f(r.ddpUnit) : "NA",
+        r.qtyText,
+        f(r.ddpTotal ?? r.total),
       ],
     };
   return {
     headers: ["Item", "Description", "Unit Price", "Qty", "Total Price"],
-    values: (r: ComputedRow, idx: string) => [idx, r.proposal_description || r.description, fmt(r.selling_unit_aed), qtyStr(r), fmt(r.selling_total_aed)],
+    values: (r: ProposalLine, idx: string, f: (v: number) => string) => [r.mapNo || idx, r.description, f(r.unit), r.qtyText, f(r.total)],
   };
 }
-
-const qtyStr = (r: ComputedRow) => (r.months > 1 ? `${r.qty} × ${r.months}mo` : String(r.qty));
 
 // ---------------------------------------------------------------------------
 exportRoutes.get("/revision/:id", (c) => handleExport(c, Number(c.req.param("id")), undefined));
@@ -195,7 +279,7 @@ async function exportXlsx(c: any, cfg: TemplateConfig, d: ProposalData, filename
     ["Project:", `${d.project.code} — ${d.project.name}`],
     ["Revision:", d.revision.label || `R${d.revision.rev_no}`],
     ["Offer Date:", new Date().toISOString().slice(0, 10)],
-    ["Currency:", cfg.currencyLabel],
+    ["Currency:", d.currencyLabel],
     ["Account Manager:", d.project.owner_name],
   ];
   for (const [k, v] of meta) {
@@ -228,7 +312,7 @@ async function exportXlsx(c: any, cfg: TemplateConfig, d: ProposalData, filename
     r++;
     sec.rows.forEach((row, i) => {
       const idx = `${sectionNo}.${String(i + 1).padStart(2, "0")}`;
-      cols.values(row, idx).forEach((v, j) => {
+      cols.values(row, idx, d.fmtMoney).forEach((v, j) => {
         ws.getCell(r, j + 1).value = v as any;
       });
       r++;
@@ -238,13 +322,17 @@ async function exportXlsx(c: any, cfg: TemplateConfig, d: ProposalData, filename
 
   // Totals block
   const totalsRows: [string, number | string][] = [
-    [`Total Investment (${cfg.currencyLabel})`, fmt(d.totalSale)],
+    [`Total Investment (${d.currencyLabel})`, d.fmtMoney(d.totalSale)],
   ];
-  if (cfg.showSpecialDiscount) {
-    totalsRows.push([`Total after Special Discount (${cfg.specialDiscountPct}%)`, fmt(d.discountedTotal)]);
+  if (d.optionDiscount > 0) {
+    totalsRows.push(["Special Discount", `-${d.fmtMoney(d.optionDiscount)}`]);
+    totalsRows.push([`Total after Discount (${d.currencyLabel})`, d.fmtMoney(d.totalSale - d.optionDiscount)]);
   }
-  totalsRows.push([`${cfg.vatPct}% VAT Charges`, fmt(d.vatAmount)]);
-  totalsRows.push([`Total Investment including VAT (${cfg.currencyLabel})`, fmt(d.grandTotal)]);
+  if (cfg.showSpecialDiscount) {
+    totalsRows.push([`Total after Special Discount (${cfg.specialDiscountPct}%)`, d.fmtMoney(d.discountedTotal)]);
+  }
+  totalsRows.push([`${cfg.vatPct}% VAT Charges`, d.fmtMoney(d.vatAmount)]);
+  totalsRows.push([`Total Investment including VAT (${d.currencyLabel})`, d.fmtMoney(d.grandTotal)]);
 
   for (const [label, val] of totalsRows) {
     ws.mergeCells(r, 1, r, ncols - 1);
@@ -262,7 +350,7 @@ async function exportXlsx(c: any, cfg: TemplateConfig, d: ProposalData, filename
   if (cfg.amountInWords) {
     ws.mergeCells(r, 1, r, ncols);
     const wc = ws.getCell(r, 1);
-    wc.value = `(In Words: ${amountInWords(d.grandTotal, cfg.currencyLabel, cfg.currencyMinor)})`;
+    wc.value = `(In Words: ${amountInWords(d.grandTotal, d.currencyLabel, d.currencyMinor)})`;
     wc.font = { bold: true, size: 9 };
     wc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
     r++;
@@ -298,14 +386,18 @@ async function exportDocx(c: any, cfg: TemplateConfig, d: ProposalData, filename
     );
     sec.rows.forEach((row, i) => {
       const idx = `${sectionNo}.${String(i + 1).padStart(2, "0")}`;
-      tableRows.push(new TableRow({ children: cols.values(row, idx).map((v) => cell(String(v))) }));
+      tableRows.push(new TableRow({ children: cols.values(row, idx, d.fmtMoney).map((v) => cell(String(v))) }));
     });
   }
 
-  const totals: [string, string][] = [[`Total Investment (${cfg.currencyLabel})`, fmt(d.totalSale)]];
-  if (cfg.showSpecialDiscount) totals.push([`Total after Special Discount (${cfg.specialDiscountPct}%)`, fmt(d.discountedTotal)]);
-  totals.push([`${cfg.vatPct}% VAT Charges`, fmt(d.vatAmount)]);
-  totals.push([`Total including VAT (${cfg.currencyLabel})`, fmt(d.grandTotal)]);
+  const totals: [string, string][] = [[`Total Investment (${d.currencyLabel})`, d.fmtMoney(d.totalSale)]];
+  if (d.optionDiscount > 0) {
+    totals.push(["Special Discount", `-${d.fmtMoney(d.optionDiscount)}`]);
+    totals.push([`Total after Discount (${d.currencyLabel})`, d.fmtMoney(d.totalSale - d.optionDiscount)]);
+  }
+  if (cfg.showSpecialDiscount) totals.push([`Total after Special Discount (${cfg.specialDiscountPct}%)`, d.fmtMoney(d.discountedTotal)]);
+  totals.push([`${cfg.vatPct}% VAT Charges`, d.fmtMoney(d.vatAmount)]);
+  totals.push([`Total including VAT (${d.currencyLabel})`, d.fmtMoney(d.grandTotal)]);
   for (const [label, val] of totals) {
     tableRows.push(
       new TableRow({
@@ -328,15 +420,15 @@ async function exportDocx(c: any, cfg: TemplateConfig, d: ProposalData, filename
           new Paragraph({ text: `Project: ${d.project.code} — ${d.project.name}` }),
           new Paragraph({ text: `Revision: ${d.revision.label || "R" + d.revision.rev_no}` }),
           new Paragraph({ text: `Offer Date: ${new Date().toISOString().slice(0, 10)}` }),
-          new Paragraph({ text: `Currency: ${cfg.currencyLabel}` }),
+          new Paragraph({ text: `Currency: ${d.currencyLabel}` }),
           new Paragraph({ text: `Account Manager: ${d.project.owner_name}` }),
           new Paragraph({ text: "" }),
           new Table({ rows: tableRows, width: { size: 100, type: WidthType.PERCENTAGE } }),
           ...(cfg.amountInWords
-            ? [new Paragraph({ text: `(In Words: ${amountInWords(d.grandTotal, cfg.currencyLabel, cfg.currencyMinor)})`, italics: true })]
+            ? [new Paragraph({ children: [new TextRun({ text: `(In Words: ${amountInWords(d.grandTotal, d.currencyLabel, d.currencyMinor)})`, italics: true })] })]
             : []),
           new Paragraph({ text: "" }),
-          ...(cfg.footerNote ? [new Paragraph({ text: cfg.footerNote, italics: true })] : []),
+          ...(cfg.footerNote ? [new Paragraph({ children: [new TextRun({ text: cfg.footerNote, italics: true })] })] : []),
           ...cfg.terms.map((t) => new Paragraph({ text: `• ${t}` })),
         ],
       },
@@ -370,7 +462,7 @@ async function exportPdf(c: any, cfg: TemplateConfig, d: ProposalData, filename:
   doc.moveDown(0.5);
   doc.fontSize(9);
   doc.text(`Customer: ${d.project.customer_name || "-"}     Project: ${d.project.code} — ${d.project.name}`);
-  doc.text(`Revision: ${d.revision.label || "R" + d.revision.rev_no}     Offer Date: ${new Date().toISOString().slice(0, 10)}     Currency: ${cfg.currencyLabel}`);
+  doc.text(`Revision: ${d.revision.label || "R" + d.revision.rev_no}     Offer Date: ${new Date().toISOString().slice(0, 10)}     Currency: ${d.currencyLabel}`);
   doc.text(`Account Manager: ${d.project.owner_name}`);
   doc.moveDown();
 
@@ -402,15 +494,19 @@ async function exportPdf(c: any, cfg: TemplateConfig, d: ProposalData, filename:
     drawRow([`${sectionNo}.00  ${sec.label}`], { bold: true, fill: "#e5e7eb", span: true });
     sec.rows.forEach((row, i) => {
       const idx = `${sectionNo}.${String(i + 1).padStart(2, "0")}`;
-      drawRow(cols.values(row, idx).map(String));
+      drawRow(cols.values(row, idx, d.fmtMoney).map(String));
     });
   }
   y += 6;
 
-  const totals: [string, string][] = [[`Total Investment (${cfg.currencyLabel})`, fmt(d.totalSale)]];
-  if (cfg.showSpecialDiscount) totals.push([`Total after Special Discount (${cfg.specialDiscountPct}%)`, fmt(d.discountedTotal)]);
-  totals.push([`${cfg.vatPct}% VAT Charges`, fmt(d.vatAmount)]);
-  totals.push([`Total Investment including VAT (${cfg.currencyLabel})`, fmt(d.grandTotal)]);
+  const totals: [string, string][] = [[`Total Investment (${d.currencyLabel})`, d.fmtMoney(d.totalSale)]];
+  if (d.optionDiscount > 0) {
+    totals.push(["Special Discount", `-${d.fmtMoney(d.optionDiscount)}`]);
+    totals.push([`Total after Discount (${d.currencyLabel})`, d.fmtMoney(d.totalSale - d.optionDiscount)]);
+  }
+  if (cfg.showSpecialDiscount) totals.push([`Total after Special Discount (${cfg.specialDiscountPct}%)`, d.fmtMoney(d.discountedTotal)]);
+  totals.push([`${cfg.vatPct}% VAT Charges`, d.fmtMoney(d.vatAmount)]);
+  totals.push([`Total Investment including VAT (${d.currencyLabel})`, d.fmtMoney(d.grandTotal)]);
   for (const [label, val] of totals) {
     if (y > 780) { doc.addPage(); y = 50; }
     doc.rect(startX, y, tableWidth, rowH).fill("#9ca3af");
@@ -422,7 +518,7 @@ async function exportPdf(c: any, cfg: TemplateConfig, d: ProposalData, filename:
   }
   if (cfg.amountInWords) {
     y += 4;
-    doc.fontSize(8).fillColor("#333").text(`(In Words: ${amountInWords(d.grandTotal, cfg.currencyLabel, cfg.currencyMinor)})`, startX, y, { width: tableWidth });
+    doc.fontSize(8).fillColor("#333").text(`(In Words: ${amountInWords(d.grandTotal, d.currencyLabel, d.currencyMinor)})`, startX, y, { width: tableWidth });
     y = doc.y;
   }
   y += 10;

@@ -211,7 +211,7 @@ export default function QuotesTab({ projectId, revisions }: any) {
                       </thead>
                       <tbody>
                         {parseResult.preview.map((row: any[], ri: number) => (
-                          <tr key={ri} className={`border-b ${ri < Number(skipRows || 0) ? "bg-amber-50 text-muted-foreground" : ""}`}>
+                          <tr key={ri} className={`border-b ${ri < Number(skipRows || 0) ? "bg-amber-50 dark:bg-amber-500/10 text-muted-foreground" : ""}`}>
                             <td className="px-1 py-0.5 text-muted-foreground">{ri + 1}</td>
                             {row.slice(0, 8).map((v: any, ci: number) => <td key={ci} className="px-1 py-0.5 max-w-32 truncate">{String(v)}</td>)}
                           </tr>
@@ -264,21 +264,21 @@ export default function QuotesTab({ projectId, revisions }: any) {
                     <Input type="number" value={r.qty} onChange={(e) => setItem(i, { qty: e.target.value })} />
                     <Input type="number" value={r.unitPrice} onChange={(e) => setItem(i, { unitPrice: e.target.value })} />
                     <Input value={r.leadTime} onChange={(e) => setItem(i, { leadTime: e.target.value })} />
-                    <button onClick={() => setItems(items.filter((_, j) => j !== i))} className="text-slate-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                    <button onClick={() => setItems(items.filter((_, j) => j !== i))} className="text-muted-foreground/70 hover:text-red-600 dark:text-red-400"><Trash2 className="h-4 w-4" /></button>
                   </div>
                 ))}
                 <Button variant="outline" size="sm" onClick={() => setItems([...items, { ...emptyItem }])}><Plus className="h-3 w-3 mr-1" /> Add row</Button>
               </div>
             </div>
-            {error && <div className="text-sm text-red-600">{error}</div>}
+            {error && <div className="text-sm text-red-600 dark:text-red-400">{error}</div>}
             <Button className="w-full" disabled={!vendor} onClick={create}>Save quote</Button>
           </DialogContent>
         </Dialog>
       </div>
 
-      <div className="rounded-md border bg-white">
+      <div className="rounded-md border bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b bg-slate-50 text-left text-xs uppercase text-muted-foreground">
+          <thead className="border-b bg-muted/60 text-left text-xs uppercase text-muted-foreground">
             <tr>
               <th className="px-4 py-3">Vendor</th><th className="px-4 py-3">Reference</th><th className="px-4 py-3">Items</th>
               <th className="px-4 py-3 text-right">Total</th><th className="px-4 py-3">Recorded by</th><th className="px-4 py-3">Date</th><th className="px-4 py-3"></th>
@@ -287,14 +287,14 @@ export default function QuotesTab({ projectId, revisions }: any) {
           <tbody>
             {quotes.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No vendor quotes recorded yet.</td></tr>}
             {quotes.map((q) => (
-              <tr key={q.id} className="border-b last:border-0 hover:bg-slate-50">
+              <tr key={q.id} className="border-b last:border-0 hover:bg-muted/60">
                 <td className="px-4 py-2.5 font-medium">{q.vendor}</td>
                 <td className="px-4 py-2.5">{q.reference || "—"}</td>
                 <td className="px-4 py-2.5">{q.item_count}</td>
                 <td className="px-4 py-2.5 text-right">{q.currency} {fmt(q.total)}</td>
                 <td className="px-4 py-2.5">{q.created_by_name}</td>
                 <td className="px-4 py-2.5 text-muted-foreground">{q.created_at?.slice(0, 10)}</td>
-                <td className="px-4 py-2.5"><button onClick={() => removeQuote(q.id)} className="text-slate-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button></td>
+                <td className="px-4 py-2.5"><button onClick={() => removeQuote(q.id)} className="text-muted-foreground/70 hover:text-red-600 dark:text-red-400"><Trash2 className="h-4 w-4" /></button></td>
               </tr>
             ))}
           </tbody>
@@ -304,9 +304,9 @@ export default function QuotesTab({ projectId, revisions }: any) {
       {attachments.length > 0 && (
         <div>
           <h3 className="mb-2 text-sm font-semibold">Imported cost sheet records</h3>
-          <div className="rounded-md border bg-white">
+          <div className="rounded-md border bg-card">
             <table className="w-full text-sm">
-              <thead className="border-b bg-slate-50 text-left text-xs uppercase text-muted-foreground">
+              <thead className="border-b bg-muted/60 text-left text-xs uppercase text-muted-foreground">
                 <tr><th className="px-4 py-2">File</th><th className="px-4 py-2">Vendor ref.</th><th className="px-4 py-2">Uploaded by</th><th className="px-4 py-2">Date</th><th className="px-4 py-2"></th></tr>
               </thead>
               <tbody>

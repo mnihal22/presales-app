@@ -19,6 +19,7 @@ import { summaryRoutes } from "./routes/summary.js";
 import { optionRoutes } from "./routes/options.js";
 import { serviceRoutes } from "./routes/services.js";
 import { importRoutes } from "./routes/imports.js";
+import { masterRoutes } from "./routes/masters.js";
 
 const app = new Hono();
 
@@ -50,6 +51,7 @@ app.route("/api/summary", summaryRoutes);
 app.route("/api/options", optionRoutes);
 app.route("/api/services", serviceRoutes);
 app.route("/api/import", importRoutes);
+app.route("/api/masters", masterRoutes);
 
 // Serve the built frontend (production / single-process deployment)
 const distDir = path.resolve(process.cwd(), "dist");

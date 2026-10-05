@@ -9,7 +9,7 @@ export default function ActivityTab({ projectId }: any) {
 
   return (
     <div className="pt-3">
-      <div className="rounded-md border bg-white p-4">
+      <div className="rounded-md border bg-card p-4">
         {rows.length === 0 && <div className="text-sm text-muted-foreground">No activity yet.</div>}
         <div className="space-y-3">
           {rows.map((a) => (

@@ -70,9 +70,9 @@ export default function TasksTab({ projectId }: any) {
         </Dialog>
       </div>
 
-      <div className="rounded-md border bg-white">
+      <div className="rounded-md border bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b bg-slate-50 text-left text-xs uppercase text-muted-foreground">
+          <thead className="border-b bg-muted/60 text-left text-xs uppercase text-muted-foreground">
             <tr>
               <th className="px-4 py-3">Task</th><th className="px-4 py-3">Assignee</th><th className="px-4 py-3">Priority</th>
               <th className="px-4 py-3">Due</th><th className="px-4 py-3">Status</th><th className="px-4 py-3"></th>
@@ -81,7 +81,7 @@ export default function TasksTab({ projectId }: any) {
           <tbody>
             {tasks.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No tasks yet.</td></tr>}
             {tasks.map((t) => (
-              <tr key={t.id} className="border-b last:border-0 hover:bg-slate-50">
+              <tr key={t.id} className="border-b last:border-0 hover:bg-muted/60">
                 <td className="px-4 py-2.5">
                   <div className="font-medium">{t.title}</div>
                   {t.description && <div className="text-xs text-muted-foreground">{t.description}</div>}
@@ -96,7 +96,7 @@ export default function TasksTab({ projectId }: any) {
                   </Select>
                 </td>
                 <td className="px-4 py-2.5">
-                  <button onClick={async () => { await api(`/api/tasks/${t.id}`, { method: "DELETE" }); load(); }} className="text-slate-400 hover:text-red-600">
+                  <button onClick={async () => { await api(`/api/tasks/${t.id}`, { method: "DELETE" }); load(); }} className="text-muted-foreground/70 hover:text-red-600 dark:text-red-400">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </td>

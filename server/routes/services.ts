@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { requireAuth, canAccessProject } from "../auth.js";
 import { logActivity } from "../audit.js";
-import { computeRow, type CostingRow } from "../calc.js";
+import { computeRow, calcOptsForProject, type CostingRow } from "../calc.js";
 
 export const serviceRoutes = new Hono();
 serviceRoutes.use("*", requireAuth);
@@ -26,7 +26,8 @@ serviceRoutes.get("/project/:projectId", (c) => {
        WHERE r.project_id = ? AND ci.category = 'Products (CAPEX)'`
     )
     .all(projectId) as CostingRow[];
-  const capexSale = capex.map(computeRow).reduce((s, r) => s + r.selling_total_aed, 0);
+  const cOpts = calcOptsForProject(projectId);
+  const capexSale = capex.map((r) => computeRow(r, cOpts)).reduce((s, r) => s + r.selling_total_aed, 0);
   const amcBasis = db
     .prepare(
       `SELECT ci.* FROM costing_items ci
@@ -34,7 +35,7 @@ serviceRoutes.get("/project/:projectId", (c) => {
        WHERE r.project_id = ? AND ci.is_amc_basis = 1`
     )
     .all(projectId) as CostingRow[];
-  const amcBasisSale = amcBasis.map(computeRow).reduce((s, r) => s + (r.sell_price_for_summary || r.landed_total_aed), 0);
+  const amcBasisSale = amcBasis.map((r) => computeRow(r, cOpts)).reduce((s, r) => s + (r.sell_price_for_summary || r.landed_total_aed), 0);
   return c.json({ services: rows, capexSaleAed: capexSale, amcBasisSaleAed: amcBasisSale });
 });
 
@@ -126,12 +127,12 @@ serviceRoutes.post("/:id/push", async (c) => {
       const rows = db
         .prepare("SELECT * FROM costing_items WHERE revision_id = ? AND is_amc_basis = 1")
         .all(rev.id) as CostingRow[];
-      baseSale = rows.map(computeRow).reduce((s, r) => s + (r.sell_price_for_summary || r.landed_total_aed), 0);
+      baseSale = rows.map((r) => computeRow(r, calcOptsForProject(svc.project_id))).reduce((s, r) => s + (r.sell_price_for_summary || r.landed_total_aed), 0);
     } else {
       const capex = db
         .prepare("SELECT * FROM costing_items WHERE revision_id = ? AND category = 'Products (CAPEX)'")
         .all(rev.id) as CostingRow[];
-      baseSale = capex.map(computeRow).reduce((s, r) => s + r.selling_total_aed, 0);
+      baseSale = capex.map((r) => computeRow(r, calcOptsForProject(svc.project_id))).reduce((s, r) => s + r.selling_total_aed, 0);
     }
     // cost base for a % service is the chosen sale value; the service's buy cost
     amount = (baseSale * Number(svc.percent || 0)) / 100;

@@ -34,8 +34,8 @@ export default function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#2B176D] via-[#3b2385] to-[#1a0f45] p-4">
-      <Card className="w-full max-w-sm shadow-2xl">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[hsl(258,34%,15%)] via-[hsl(260,30%,11%)] to-[hsl(260,30%,6.5%)] p-4">
+      <Card className="w-full max-w-sm shadow-2xl border-t-2 border-t-[hsl(262,45%,62%)]">
         <CardHeader>
           <img src="/logo.png" alt="ATCOM" className="h-8 w-auto self-start mb-3" />
           <CardTitle className="text-xl">Costing &amp; Proposal Hub</CardTitle>
@@ -51,8 +51,8 @@ export default function Login() {
               <label className="text-sm font-medium">Password</label>
               <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
             </div>
-            {error && <div className="text-sm text-red-600">{error}</div>}
-            <Button className="w-full bg-[#2B176D] hover:bg-[#3b2385]" disabled={busy || !username || !password}>
+            {error && <div className="text-sm text-red-600 dark:text-red-400">{error}</div>}
+            <Button className="w-full bg-primary hover:bg-primary/90" disabled={busy || !username || !password}>
               {busy ? "Signing in…" : "Sign in"}
             </Button>
             <div className="text-center text-[10px] text-muted-foreground pt-1">v{version || "…"}</div>

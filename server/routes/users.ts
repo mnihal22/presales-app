@@ -27,12 +27,13 @@ const upsertSchema = z.object({
 userRoutes.post("/", requireRole("admin"), async (c) => {
   const parsed = upsertSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
-  if (!parsed.data.password) return c.json({ error: "password required for new user" }, 400);
+  const password = parsed.data.password;
+  if (!password) return c.json({ error: "password required for new user" }, 400);
   const d = parsed.data;
   try {
     const res = db
       .prepare("INSERT INTO users (username, password_hash, display_name, email, role) VALUES (?,?,?,?,?)")
-      .run(d.username, bcrypt.hashSync(d.password, 10), d.displayName, d.email || null, d.role);
+      .run(d.username, bcrypt.hashSync(password, 10), d.displayName, d.email || null, d.role);
     logActivity({ module: "core", userId: c.get("user").id, action: "user.created", entityType: "user", entityId: Number(res.lastInsertRowid), details: d.username });
     return c.json({ id: Number(res.lastInsertRowid) }, 201);
   } catch (e: any) {
@@ -54,6 +55,30 @@ userRoutes.put("/:id", requireRole("admin"), async (c) => {
   if (d.role) db.prepare("UPDATE users SET role = ? WHERE id = ?").run(d.role, id);
   if (d.password) db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(bcrypt.hashSync(d.password, 10), id);
   logActivity({ module: "core", userId: c.get("user").id, action: "user.updated", entityType: "user", entityId: id });
+  return c.json({ ok: true });
+});
+
+// --- Per-module access (granular privileges) --------------------------------
+userRoutes.get("/:id/module-roles", requireRole("admin"), (c) => {
+  const rows = db.prepare("SELECT module, role FROM module_roles WHERE user_id = ?").all(Number(c.req.param("id")));
+  return c.json(rows);
+});
+
+userRoutes.put("/:id/module-roles", requireRole("admin"), async (c) => {
+  const id = Number(c.req.param("id"));
+  const parsed = z.object({
+    module: z.string().min(1),
+    role: z.enum(["admin", "manager", "member", "viewer"]).nullable(), // null = back to default
+  }).safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "invalid input" }, 400);
+  if (parsed.data.role === null) {
+    db.prepare("DELETE FROM module_roles WHERE user_id = ? AND module = ?").run(id, parsed.data.module);
+  } else {
+    db.prepare(`INSERT INTO module_roles (user_id, module, role) VALUES (?,?,?)
+                ON CONFLICT (user_id, module) DO UPDATE SET role = excluded.role`)
+      .run(id, parsed.data.module, parsed.data.role);
+  }
+  logActivity({ module: "core", userId: c.get("user").id, action: "user.module_role_set", entityType: "user", entityId: id, details: `${parsed.data.module} → ${parsed.data.role ?? "default"}` });
   return c.json({ ok: true });
 });
 

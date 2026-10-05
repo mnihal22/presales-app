@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,8 +20,18 @@ export interface ItemForm {
   exchRate: string; landedFactor: string; sellOverride: string; isAmc: boolean; isSwSupport: boolean;
   itemGrouping: string; productGrouping: string; offerGrouping: string; inProposal: boolean;
   mapNo: string; aplUnitPrice: string; aplDiscountPct: string; notes: string;
-  isAmcBasis: boolean;
+  isAmcBasis: boolean; mpgCode: string; rowColor: string; discSellOverride: string;
 }
+
+export const ROW_COLORS: { key: string; label: string; swatch: string }[] = [
+  { key: "", label: "None", swatch: "bg-card border" },
+  { key: "yellow", label: "Yellow", swatch: "bg-yellow-300" },
+  { key: "green", label: "Green", swatch: "bg-emerald-300" },
+  { key: "red", label: "Red", swatch: "bg-red-300" },
+  { key: "blue", label: "Blue", swatch: "bg-sky-300" },
+  { key: "violet", label: "Violet", swatch: "bg-violet-300" },
+  { key: "orange", label: "Orange", swatch: "bg-orange-300" },
+];
 
 export const emptyItemForm: ItemForm = {
   category: "Products (CAPEX)", description: "", vendor: "", qty: "1", unitCost: "", marginPct: "25",
@@ -30,7 +40,7 @@ export const emptyItemForm: ItemForm = {
   exchRate: "1", landedFactor: "1", sellOverride: "", isAmc: false, isSwSupport: false,
   itemGrouping: "", productGrouping: "", offerGrouping: "", inProposal: true,
   mapNo: "", aplUnitPrice: "", aplDiscountPct: "0", notes: "",
-  isAmcBasis: false,
+  isAmcBasis: false, mpgCode: "", rowColor: "", discSellOverride: "",
 };
 
 export function itemToForm(it: any): ItemForm {
@@ -45,7 +55,8 @@ export function itemToForm(it: any): ItemForm {
     itemGrouping: it.item_grouping || "", productGrouping: it.product_grouping || "", offerGrouping: it.offer_grouping || "",
     inProposal: !!it.in_proposal, mapNo: it.map_no || "", aplUnitPrice: s(it.apl_unit_price),
     aplDiscountPct: s(it.apl_discount_pct ?? 0), notes: it.notes || "",
-    isAmcBasis: !!it.is_amc_basis,
+    isAmcBasis: !!it.is_amc_basis, mpgCode: it.mpg_code || "",
+    rowColor: it.row_color || "", discSellOverride: s(it.disc_sell_override),
   };
 }
 
@@ -63,7 +74,8 @@ export function formToPayload(f: ItemForm) {
     itemGrouping: f.itemGrouping || null, productGrouping: f.productGrouping || null,
     offerGrouping: f.offerGrouping || null, inProposal: f.inProposal, mapNo: f.mapNo || null,
     aplUnitPrice: num(f.aplUnitPrice), aplDiscountPct: Number(f.aplDiscountPct) || 0,
-    isAmcBasis: f.isAmcBasis,
+    isAmcBasis: f.isAmcBasis, mpgCode: f.mpgCode || null,
+    rowColor: f.rowColor || null, discSellOverride: num(f.discSellOverride),
   };
 }
 
@@ -92,6 +104,21 @@ export default function ItemEditor({
   if (key !== lastKey) { setLastKey(key); setF(initial); }
 
   const set = (patch: Partial<ItemForm>) => setF((p) => ({ ...p, ...patch }));
+
+  // MPG master lookup — helper only, never mandatory. If the vendor + MPG code
+  // match a contracted discount, offer to apply it.
+  const [mpgHint, setMpgHint] = useState<{ discount_pct: number; category: string | null } | null>(null);
+  useEffect(() => {
+    setMpgHint(null);
+    const v = f.vendor.trim(), m = f.mpgCode.trim();
+    if (!v || !m) return;
+    const t = setTimeout(() => {
+      api(`/api/masters/mpg-discounts/lookup/${encodeURIComponent(v)}/${encodeURIComponent(m)}`)
+        .then((r: any) => setMpgHint(r?.found ? { discount_pct: r.discount_pct, category: r.category } : null))
+        .catch(() => setMpgHint(null));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [f.vendor, f.mpgCode]);
   const numInput = (k: keyof ItemForm, label: string) => (
     <Field label={label}><Input type="number" step="any" value={f[k] as string} onChange={(e) => set({ [k]: e.target.value } as any)} /></Field>
   );
@@ -122,6 +149,22 @@ export default function ItemEditor({
             </Field>
             <Field label="Vendor"><Input value={f.vendor} onChange={(e) => set({ vendor: e.target.value })} /></Field>
           </div>
+          <div className="grid grid-cols-2 gap-3 items-end">
+            <Field label="MPG / product category code (optional)">
+              <Input value={f.mpgCode} onChange={(e) => set({ mpgCode: e.target.value })} placeholder="e.g. 1P — vendor-dependent" />
+            </Field>
+            {mpgHint && (
+              <div className="text-xs rounded-md bg-violet-50 border border-violet-200 dark:bg-violet-500/10 dark:border-violet-500/30 px-3 py-2 flex items-center justify-between gap-2">
+                <span className="text-violet-800 dark:text-violet-300">
+                  Contracted discount: <b>{mpgHint.discount_pct}%</b>{mpgHint.category ? ` · ${mpgHint.category}` : ""}
+                </span>
+                <Button type="button" size="sm" variant="outline" className="h-7 text-xs"
+                  onClick={() => set({ aplDiscountPct: String(mpgHint.discount_pct) })}>
+                  Apply to APL disc.
+                </Button>
+              </div>
+            )}
+          </div>
           <Field label="Description *"><Input value={f.description} onChange={(e) => set({ description: e.target.value })} /></Field>
           <Field label="Proposal description (customer-facing, optional)"><Input value={f.proposalDescription} onChange={(e) => set({ proposalDescription: e.target.value })} /></Field>
 
@@ -141,7 +184,6 @@ export default function ItemEditor({
               {numInput("listUnitPrice", "List unit price")}
               {numInput("partnerDiscountPct", "Partner disc. %")}
               {numInput("unitCost", "Unit buy price (FCR)")}
-              {numInput("discountedUnitBuyPrice", "Disc. unit buy price")}
             </div>
             <div className="grid grid-cols-4 gap-3">
               {numInput("exchRate", "Exchange rate")}
@@ -157,6 +199,13 @@ export default function ItemEditor({
               {numInput("aplUnitPrice", "APL unit price (171H)")}
               {numInput("aplDiscountPct", "Disc. on APL %")}
             </div>
+            <div className="grid grid-cols-4 gap-3">
+              {numInput("discountedUnitBuyPrice", "Disc. unit buy price")}
+              {numInput("discSellOverride", "Disc. sell override (unit, AED)")}
+              <div className="col-span-2 text-xs text-muted-foreground self-end pb-2">
+                Discounted-offer levers — used only when a proposal option has "Apply option discount" on. The standard offer above never changes.
+              </div>
+            </div>
           </div>
 
           <div className="rounded-md border p-3 space-y-3">
@@ -167,6 +216,14 @@ export default function ItemEditor({
               <Field label="Product grouping"><Input value={f.productGrouping} onChange={(e) => set({ productGrouping: e.target.value })} /></Field>
               <Field label="Offer grouping"><Input value={f.offerGrouping} onChange={(e) => set({ offerGrouping: e.target.value })} placeholder="sbc1k" /></Field>
             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Row color:</span>
+              {ROW_COLORS.map((c) => (
+                <button key={c.key} type="button" title={c.label}
+                  onClick={() => set({ rowColor: c.key })}
+                  className={`h-5 w-5 rounded-full ${c.swatch} ${f.rowColor === c.key ? "ring-2 ring-offset-1 ring-slate-700" : "opacity-60 hover:opacity-100"}`} />
+              ))}
+            </div>
             <div className="flex flex-wrap gap-6">
               <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.inProposal} onCheckedChange={(v) => set({ inProposal: !!v })} /> Include in proposal</label>
               <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isAmcBasis} onCheckedChange={(v) => set({ isAmcBasis: !!v })} /> Counts toward AMC base</label>
@@ -174,7 +231,7 @@ export default function ItemEditor({
               <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isSwSupport} onCheckedChange={(v) => set({ isSwSupport: !!v })} /> Software support</label>
             </div>
             {f.isAmcBasis && (
-              <p className="text-xs text-violet-700 bg-violet-50 rounded px-2 py-1">
+              <p className="text-xs text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-500/10 dark:text-violet-300 rounded px-2 py-1">
                 This item's value feeds the "% of AMC base" service calculation.
                 {f.inProposal
                   ? " It is new equipment — it also stays in the proposal and sale totals."
@@ -184,7 +241,7 @@ export default function ItemEditor({
           </div>
 
           <Field label="Notes"><Input value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>
-          {error && <div className="text-sm text-red-600">{error}</div>}
+          {error && <div className="text-sm text-red-600 dark:text-red-400">{error}</div>}
           <Button className="w-full" disabled={busy || !f.description} onClick={save}>{busy ? "Saving…" : "Save item"}</Button>
         </div>
       </DialogContent>

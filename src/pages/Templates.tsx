@@ -121,17 +121,17 @@ export default function Templates() {
 
       <div className="grid md:grid-cols-2 gap-4">
         {rows.map((t) => (
-          <div key={t.id} className="rounded-md border bg-white p-4 space-y-2">
+          <div key={t.id} className="rounded-md border bg-card p-4 space-y-2">
             <div className="flex items-center justify-between">
               <div className="font-medium">{t.name}</div>
               <div className="flex items-center gap-1">
                 {t.is_default
-                  ? <Badge className="bg-emerald-100 text-emerald-700" variant="secondary">Default</Badge>
+                  ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" variant="secondary">Default</Badge>
                   : <Button variant="ghost" size="sm" onClick={async () => { await api(`/api/templates/${t.id}/set-default`, { method: "POST" }); load(); }}><Star className="h-4 w-4 mr-1" /> Set default</Button>}
                 <Button variant="ghost" size="sm" onClick={() => openEditor(t)}><Pencil className="h-4 w-4" /></Button>
                 {!t.is_default && (
                   <Button variant="ghost" size="sm" onClick={async () => { if (confirm("Delete template?")) { await api(`/api/templates/${t.id}`, { method: "DELETE" }); load(); } }}>
-                    <Trash2 className="h-4 w-4 text-slate-400" />
+                    <Trash2 className="h-4 w-4 text-muted-foreground/70" />
                   </Button>
                 )}
               </div>

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../db.js";
-import { requireAuth, requireRole, canAccessProject } from "../auth.js";
+import { requireAuth, requireRole, canAccessProject, canUnlockRevision, moduleRoleAtLeast } from "../auth.js";
 import { logActivity } from "../audit.js";
 
 export const projectRoutes = new Hono();
@@ -45,7 +45,10 @@ const createSchema = z.object({
   memberIds: z.array(z.number()).default([]),
 });
 
-projectRoutes.post("/", requireRole("admin", "sales"), async (c) => {
+projectRoutes.post("/", async (c) => {
+  const user0 = c.get("user");
+  if (user0.role === "presales" && !moduleRoleAtLeast(user0, "presales", "manager"))
+    return c.json({ error: "forbidden" }, 403);
   const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
   const d = parsed.data;
@@ -85,7 +88,11 @@ projectRoutes.get("/:id", (c) => {
     .prepare("SELECT u.id, u.display_name, u.role FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ?")
     .all(id);
   const revisions = db
-    .prepare("SELECT r.*, u.display_name AS created_by_name FROM revisions r JOIN users u ON u.id = r.created_by WHERE r.project_id = ? ORDER BY r.rev_no DESC")
+    .prepare(
+      `SELECT r.*, u.display_name AS created_by_name, lu.display_name AS locked_by_name
+       FROM revisions r JOIN users u ON u.id = r.created_by LEFT JOIN users lu ON lu.id = r.locked_by
+       WHERE r.project_id = ? ORDER BY r.rev_no DESC`
+    )
     .all(id);
   return c.json({ project, members, revisions });
 });
@@ -97,6 +104,7 @@ const updateSchema = z.object({
   description: z.string().nullable().optional(),
   status: z.enum(["draft", "in_progress", "in_review", "approved", "submitted", "won", "lost", "cancelled"]).optional(),
   memberIds: z.array(z.number()).optional(),
+  roundSellUp: z.boolean().optional(),
 });
 
 projectRoutes.put("/:id", async (c) => {
@@ -107,11 +115,13 @@ projectRoutes.put("/:id", async (c) => {
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
   const d = parsed.data;
   // Only sales/admin may change status or membership
-  if ((d.status || d.memberIds) && user.role === "presales") return c.json({ error: "forbidden" }, 403);
+  if ((d.status || d.memberIds) && user.role === "presales" && !moduleRoleAtLeast(user, "presales", "manager"))
+    return c.json({ error: "forbidden" }, 403);
 
   if (d.name) db.prepare("UPDATE projects SET name = ? WHERE id = ?").run(d.name, id);
   if (d.customerId !== undefined) db.prepare("UPDATE projects SET customer_id = ? WHERE id = ?").run(d.customerId, id);
   if (d.description !== undefined) db.prepare("UPDATE projects SET description = ? WHERE id = ?").run(d.description, id);
+  if (d.roundSellUp !== undefined) db.prepare("UPDATE projects SET round_sell_up = ? WHERE id = ?").run(d.roundSellUp ? 1 : 0, id);
   if (d.status) {
     db.prepare("UPDATE projects SET status = ? WHERE id = ?").run(d.status, id);
     logActivity({ projectId: id, userId: user.id, action: "project.status_changed", entityType: "project", entityId: id, details: d.status });
@@ -128,14 +138,17 @@ projectRoutes.put("/:id", async (c) => {
 });
 
 // --- Delete project (admin only) ---------------------------------------------
-projectRoutes.delete("/:id", requireRole("admin"), (c) => {
+projectRoutes.delete("/:id", (c) => {
+  const user = c.get("user");
+  if (user.role !== "admin" && !moduleRoleAtLeast(user, "presales", "admin"))
+    return c.json({ error: "forbidden" }, 403);
   const id = Number(c.req.param("id"));
   const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as any;
   if (!project) return c.json({ error: "not found" }, 404);
   // FK ON DELETE CASCADE handles members, revisions→costing, quotes→items,
   // tasks, activity, options→option_items, service_calcs, attachments rows.
   db.prepare("DELETE FROM projects WHERE id = ?").run(id);
-  logActivity({ userId: c.get("user").id, action: "project.deleted", entityType: "project", entityId: id, details: `${project.code} — ${project.name}` });
+  logActivity({ userId: user.id, action: "project.deleted", entityType: "project", entityId: id, details: `${project.code} — ${project.name}` });
   return c.json({ ok: true });
 });
 
@@ -175,8 +188,25 @@ projectRoutes.post("/:id/revisions", (c) => {
 projectRoutes.post("/:id/revisions/:revId/lock", (c) => {
   const projectId = Number(c.req.param("id"));
   const revId = Number(c.req.param("revId"));
-  if (!canAccessProject(c.get("user"), projectId)) return c.json({ error: "forbidden" }, 403);
-  db.prepare("UPDATE revisions SET status = 'locked' WHERE id = ? AND project_id = ?").run(revId, projectId);
-  logActivity({ projectId, userId: c.get("user").id, action: "revision.locked", entityType: "revision", entityId: revId });
+  const user = c.get("user");
+  if (!canAccessProject(user, projectId)) return c.json({ error: "forbidden" }, 403);
+  db.prepare("UPDATE revisions SET status = 'locked', locked_by = ? WHERE id = ? AND project_id = ?").run(user.id, revId, projectId);
+  logActivity({ projectId, userId: user.id, action: "revision.locked", entityType: "revision", entityId: revId });
+  return c.json({ ok: true });
+});
+
+projectRoutes.post("/:id/revisions/:revId/unlock", (c) => {
+  const projectId = Number(c.req.param("id"));
+  const revId = Number(c.req.param("revId"));
+  const user = c.get("user");
+  if (!canAccessProject(user, projectId)) return c.json({ error: "forbidden" }, 403);
+  const rev = db.prepare("SELECT * FROM revisions WHERE id = ? AND project_id = ?").get(revId, projectId) as any;
+  if (!rev) return c.json({ error: "not found" }, 404);
+  if (rev.status !== "locked") return c.json({ error: "revision is not locked" }, 409);
+  if (!canUnlockRevision(user, rev)) {
+    return c.json({ error: "only an admin or the person who locked this revision can unlock it" }, 403);
+  }
+  db.prepare("UPDATE revisions SET status = 'open', locked_by = NULL WHERE id = ?").run(revId);
+  logActivity({ projectId, userId: user.id, action: "revision.unlocked", entityType: "revision", entityId: revId });
   return c.json({ ok: true });
 });

@@ -9,6 +9,7 @@ import Customers from './pages/Customers'
 import MyTasks from './pages/MyTasks'
 import Activity from './pages/Activity'
 import Templates from './pages/Templates'
+import Masters from './pages/Masters'
 import Users from './pages/Users'
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/tasks" element={<MyTasks />} />
           <Route path="/activity" element={<Activity />} />
           <Route path="/templates" element={<Templates />} />
+          <Route path="/masters" element={<Masters />} />
           <Route path="/users" element={<Users />} />
         </Route>
       </Routes>

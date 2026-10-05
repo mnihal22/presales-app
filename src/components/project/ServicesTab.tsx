@@ -19,6 +19,8 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
   const [services, setServices] = useState<any[]>([]);
   const [capexSale, setCapexSale] = useState(0);
   const [amcBasisSale, setAmcBasisSale] = useState(0);
+  const [rateCard, setRateCard] = useState<any[]>([]);
+  const [supportTypes, setSupportTypes] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   const [pushTarget, setPushTarget] = useState<any>(null);
   const [form, setForm] = useState({ name: "", method: "fixed", rate: "", effort: "", effortUnit: "days", percent: "", percentBase: "capex", amount: "", notes: "" });
@@ -32,6 +34,10 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
     }).catch(console.error);
 
   useEffect(() => { load(); }, [projectId]);
+  useEffect(() => {
+    api<any[]>("/api/masters/rate-card").then(setRateCard).catch(() => {});
+    api<any[]>("/api/masters/support-types").then(setSupportTypes).catch(() => {});
+  }, []);
 
   const computedAmount = () => {
     if (form.method === "fixed") return Number(form.amount) || 0;
@@ -71,7 +77,7 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           Price professional services and AMC here, then push them into the {activeRevision?.label} costing sheet.
-          CAPEX sale: <span className="font-medium text-foreground">{fmt(capexSale)} AED</span> · AMC-base items: <span className="font-medium text-violet-700">{fmt(amcBasisSale)} AED</span>
+          CAPEX sale: <span className="font-medium text-foreground">{fmt(capexSale)} AED</span> · AMC-base items: <span className="font-medium text-violet-700 dark:text-violet-300">{fmt(amcBasisSale)} AED</span>
         </p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild><Button><Plus className="h-4 w-4 mr-1" /> New service calc</Button></DialogTrigger>
@@ -92,19 +98,42 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
                   <Input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
               )}
               {form.method === "rate" && (
-                <div className="grid grid-cols-3 gap-2">
-                  <div><label className="text-sm font-medium">Rate</label>
-                    <Input type="number" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} /></div>
-                  <div><label className="text-sm font-medium">Effort</label>
-                    <Input type="number" value={form.effort} onChange={(e) => setForm({ ...form, effort: e.target.value })} /></div>
-                  <div><label className="text-sm font-medium">Unit</label>
-                    <Select value={form.effortUnit} onValueChange={(v) => setForm({ ...form, effortUnit: v })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{["days", "engineers", "visits", "months", "hours"].map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
-                    </Select></div>
+                <div className="space-y-2">
+                  {rateCard.length > 0 && (
+                    <div><label className="text-sm font-medium">Pick from rate card (optional)</label>
+                      <Select value="" onValueChange={(code) => {
+                        const rc = rateCard.find((r) => r.code === code);
+                        if (rc) setForm({ ...form, rate: String(rc.rate_aed), name: form.name || rc.description || rc.code, effortUnit: "days" });
+                      }}>
+                        <SelectTrigger><SelectValue placeholder="Choose a rate-card code…" /></SelectTrigger>
+                        <SelectContent>{rateCard.map((r) => <SelectItem key={r.code} value={r.code}>{r.code} — {r.description} ({fmt(r.rate_aed)} AED)</SelectItem>)}</SelectContent>
+                      </Select></div>
+                  )}
+                  <div className="grid grid-cols-3 gap-2">
+                    <div><label className="text-sm font-medium">Rate</label>
+                      <Input type="number" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} /></div>
+                    <div><label className="text-sm font-medium">Effort</label>
+                      <Input type="number" value={form.effort} onChange={(e) => setForm({ ...form, effort: e.target.value })} /></div>
+                    <div><label className="text-sm font-medium">Unit</label>
+                      <Select value={form.effortUnit} onValueChange={(v) => setForm({ ...form, effortUnit: v })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{["days", "engineers", "visits", "months", "hours"].map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+                      </Select></div>
+                  </div>
                 </div>
               )}
               {form.method === "percent" && (
+                <div className="space-y-2">
+                {supportTypes.length > 0 && (
+                  <div><label className="text-sm font-medium">Pick a support type (optional)</label>
+                    <Select value="" onValueChange={(name) => {
+                      const st = supportTypes.find((s) => s.name === name);
+                      if (st) setForm({ ...form, percent: String(st.amc_pct), percentBase: "amc_basis", name: form.name || `AMC — ${st.name}` });
+                    }}>
+                      <SelectTrigger><SelectValue placeholder="Choose a support type…" /></SelectTrigger>
+                      <SelectContent>{supportTypes.map((s) => <SelectItem key={s.name} value={s.name}>{s.name} ({s.amc_pct}%)</SelectItem>)}</SelectContent>
+                    </Select></div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <div><label className="text-sm font-medium">Percent %</label>
                     <Input type="number" value={form.percent} onChange={(e) => setForm({ ...form, percent: e.target.value })} /></div>
@@ -117,19 +146,20 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
                       </SelectContent>
                     </Select></div>
                 </div>
+                </div>
               )}
               <div><label className="text-sm font-medium">Notes</label>
                 <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
-              <div className="rounded bg-slate-50 p-2 text-sm">Calculated cost: <span className="font-semibold">{fmt(computedAmount())} AED</span></div>
+              <div className="rounded bg-muted/60 p-2 text-sm">Calculated cost: <span className="font-semibold">{fmt(computedAmount())} AED</span></div>
               <Button className="w-full" disabled={!form.name} onClick={create}>Save</Button>
             </div>
           </DialogContent>
         </Dialog>
       </div>
 
-      <div className="rounded-md border bg-white">
+      <div className="rounded-md border bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b bg-slate-50 text-left text-xs uppercase text-muted-foreground">
+          <thead className="border-b bg-muted/60 text-left text-xs uppercase text-muted-foreground">
             <tr>
               <th className="px-4 py-3">Name</th><th className="px-4 py-3">Method</th><th className="px-4 py-3">Details</th>
               <th className="px-4 py-3 text-right">Cost (AED)</th><th className="px-4 py-3">Status</th><th className="px-4 py-3"></th>
@@ -149,7 +179,7 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
                 <td className="px-4 py-2.5 text-right">{fmt(s.amount)}</td>
                 <td className="px-4 py-2.5">
                   {s.costing_item_id
-                    ? <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">In costing</Badge>
+                    ? <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">In costing</Badge>
                     : <Badge variant="secondary">Not pushed</Badge>}
                 </td>
                 <td className="px-4 py-2.5 whitespace-nowrap text-right">
@@ -158,7 +188,7 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
                       <ArrowRightToLine className="h-3 w-3 mr-1" /> Push to costing
                     </Button>
                   )}
-                  <button className="ml-2 text-slate-400 hover:text-red-600 align-middle"
+                  <button className="ml-2 text-muted-foreground/70 hover:text-red-600 dark:text-red-400 align-middle"
                     onClick={async () => { if (confirm("Delete?")) { await api(`/api/services/${s.id}`, { method: "DELETE" }); load(); } }}>
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -183,7 +213,7 @@ export default function ServicesTab({ projectId, activeRevision }: any) {
               </Select></div>
             <div><label className="text-sm font-medium">GPM %</label>
               <Input type="number" value={pushForm.marginPct} onChange={(e) => setPushForm({ ...pushForm, marginPct: e.target.value })} /></div>
-            <div className="rounded bg-slate-50 p-2 text-sm">
+            <div className="rounded bg-muted/60 p-2 text-sm">
               Cost {fmt(pushTarget?.amount || 0)} AED → sale ≈ <span className="font-semibold">{fmt((pushTarget?.amount || 0) / (1 - (Number(pushForm.marginPct) || 0) / 100))} AED</span>
             </div>
             <Button className="w-full" onClick={push}>Push to costing sheet</Button>

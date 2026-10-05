@@ -11,7 +11,7 @@ export default function Activity() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Activity</h1>
-      <div className="rounded-md border bg-white p-4">
+      <div className="rounded-md border bg-card p-4">
         {rows.length === 0 && <div className="text-sm text-muted-foreground">No activity yet.</div>}
         <div className="space-y-3">
           {rows.map((a) => (

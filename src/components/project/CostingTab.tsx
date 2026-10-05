@@ -6,22 +6,32 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Lock, Plus, Trash2, FileInput, Pencil, Search, X, SlidersHorizontal } from "lucide-react";
+import { Lock, LockOpen, Plus, Trash2, FileInput, Pencil, Search, X, SlidersHorizontal } from "lucide-react";
 import ItemEditor, { emptyItemForm, itemToForm } from "./ItemEditor";
 
 const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const CATEGORIES = ["Products (CAPEX)", "Subscriptions & Support (OPEX)", "Professional Services", "AMC"];
 
+const ROW_COLOR_BG: Record<string, string> = {
+  yellow: "bg-yellow-100/70 dark:bg-yellow-500/15",
+  green: "bg-emerald-100/70 dark:bg-emerald-500/15",
+  red: "bg-red-100/70 dark:bg-red-500/15",
+  blue: "bg-sky-100/70 dark:bg-sky-500/15",
+  violet: "bg-violet-100/70 dark:bg-violet-500/15",
+  orange: "bg-orange-100/70 dark:bg-orange-500/15",
+};
+
 const BULK_FIELDS = [
   { key: "marginPct", label: "GPM %", type: "number" },
   { key: "landedFactor", label: "Landed factor", type: "number" },
   { key: "exchRate", label: "Exchange rate", type: "number" },
   { key: "partnerDiscountPct", label: "Partner discount %", type: "number" },
-  { key: "category", label: "Category", type: "category" },
+  { key: "category", label: "Category (subscription / perpetual-CAPEX / PS / AMC)", type: "category" },
   { key: "itemGrouping", label: "Item grouping", type: "text" },
   { key: "productGrouping", label: "Product grouping", type: "text" },
   { key: "offerGrouping", label: "Offer grouping", type: "text" },
+  { key: "rowColor", label: "Row color", type: "color" },
   { key: "inProposal", label: "In proposal", type: "bool" },
   { key: "isAmcBasis", label: "AMC basis", type: "bool" },
   { key: "isAmc", label: "AMC line", type: "bool" },
@@ -149,6 +159,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
       if (raw === undefined || raw === "") continue;
       if (f.type === "number") fields[f.key] = Number(raw);
       else if (f.type === "bool") fields[f.key] = raw === "yes";
+      else if (f.type === "color") fields[f.key] = raw === "__clear__" ? null : raw;
       else fields[f.key] = raw;
     }
     if (Object.keys(fields).length === 0) return;
@@ -189,10 +200,19 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
               ))}
             </SelectContent>
           </Select>
-          {locked && <Badge variant="secondary" className="bg-amber-100 text-amber-800"><Lock className="h-3 w-3 mr-1" /> Locked</Badge>}
+          {locked && <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"><Lock className="h-3 w-3 mr-1" /> Locked{activeRevision.locked_by_name ? ` by ${activeRevision.locked_by_name}` : ""}</Badge>}
           <span className="text-xs text-muted-foreground">GPM-based: sell = landed ÷ (1 − GPM)</span>
         </div>
         <div className="flex items-center gap-2">
+          {locked && (
+            <Button variant="outline" onClick={async () => {
+              if (!confirm("Unlock this revision? Only an admin or the person who locked it can do this.")) return;
+              try {
+                await api(`/api/projects/${projectId}/revisions/${activeRevision.id}/unlock`, { method: "POST" });
+                onChanged();
+              } catch (e: any) { alert(e.message); }
+            }}><LockOpen className="h-4 w-4 mr-1" /> Unlock</Button>
+          )}
           {!locked && (
             <>
               <Dialog open={importOpen} onOpenChange={setImportOpen}>
@@ -207,7 +227,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
                           <div className="text-sm font-medium">{q.vendor} {q.reference ? `· ${q.reference}` : ""}</div>
                           <div className="text-xs text-muted-foreground">{q.currency} {fmt(q.total)}</div>
                         </div>
-                        <button className="mb-1 text-xs text-[#2B176D] hover:underline"
+                        <button className="mb-1 text-xs text-primary hover:underline"
                           onClick={async () => {
                             if (!quoteDetail[q.id]) {
                               const d = await api(`/api/quotes/${q.id}`);
@@ -245,7 +265,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
       </div>
 
       {/* ------- filter bar ------- */}
-      <div className="rounded-md border bg-white p-2 space-y-2">
+      <div className="rounded-md border bg-card p-2 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
@@ -306,10 +326,10 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
 
         {/* ------- bulk action bar ------- */}
         {selected.length > 0 && !locked && (
-          <div className="flex flex-wrap items-center gap-2 rounded bg-[#2B176D]/5 border border-[#2B176D]/20 px-2 py-1.5">
-            <span className="text-xs font-medium text-[#2B176D]">{selected.length} selected</span>
+          <div className="flex flex-wrap items-center gap-2 rounded bg-primary/5 border border-primary/20 px-2 py-1.5">
+            <span className="text-xs font-medium text-primary">{selected.length} selected</span>
             {!allPageSelected && selected.length < filtered.length && (
-              <button className="text-xs text-[#2B176D] hover:underline" onClick={selectAllFiltered}>
+              <button className="text-xs text-primary hover:underline" onClick={selectAllFiltered}>
                 Select all {filtered.length} filtered
               </button>
             )}
@@ -347,23 +367,37 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
                           </SelectContent>
                         </Select>
                       )}
+                      {f.type === "color" && (
+                        <Select value={bulkValues[f.key] ?? ""} onValueChange={(v) => setBulkValues({ ...bulkValues, [f.key]: v })}>
+                          <SelectTrigger className="h-8"><SelectValue placeholder="skip" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="yellow">Yellow</SelectItem>
+                            <SelectItem value="green">Green</SelectItem>
+                            <SelectItem value="red">Red</SelectItem>
+                            <SelectItem value="blue">Blue</SelectItem>
+                            <SelectItem value="violet">Violet</SelectItem>
+                            <SelectItem value="orange">Orange</SelectItem>
+                            <SelectItem value="__clear__">Clear color</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                   ))}
                 </div>
-                <Button className="w-full bg-[#2B176D] hover:bg-[#3b2385]" disabled={bulkBusy} onClick={applyBulk}>
+                <Button className="w-full bg-primary hover:bg-primary/90" disabled={bulkBusy} onClick={applyBulk}>
                   {bulkBusy ? "Applying…" : `Apply to ${selected.length} items`}
                 </Button>
               </DialogContent>
             </Dialog>
-            <Button size="sm" variant="outline" className="text-red-600" onClick={bulkDelete}><Trash2 className="h-3.5 w-3.5 mr-1" /> Delete</Button>
+            <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400" onClick={bulkDelete}><Trash2 className="h-3.5 w-3.5 mr-1" /> Delete</Button>
             <button className="ml-auto text-xs text-muted-foreground hover:underline" onClick={() => setSelected([])}>Clear selection</button>
           </div>
         )}
       </div>
 
-      <div className="overflow-x-auto rounded-md border bg-white">
+      <div className="overflow-x-auto rounded-md border bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b bg-[#2B176D]/5 text-left text-xs uppercase text-muted-foreground">
+          <thead className="border-b bg-primary/5 text-left text-xs uppercase text-muted-foreground">
             <tr>
               {!locked && (
                 <th className="px-3 py-2 w-8">
@@ -391,22 +425,22 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
               </td></tr>
             )}
             {pageItems.map((it: any) => (
-              <tr key={it.id} className={`border-b last:border-0 hover:bg-violet-50/50 ${selected.includes(it.id) ? "bg-[#2B176D]/5" : ""}`}>
+              <tr key={it.id} className={`border-b last:border-0 hover:bg-accent/60 ${selected.includes(it.id) ? "bg-primary/5" : (ROW_COLOR_BG[it.row_color] || "")}`}>
                 {!locked && (
                   <td className="px-3 py-1.5">
                     <Checkbox checked={selected.includes(it.id)} onCheckedChange={(v) => toggleOne(it.id, !!v)} />
                   </td>
                 )}
                 <td className="px-3 py-1.5 font-mono text-xs">{it.map_no || "—"}</td>
-                <td className="px-3 py-1.5">{it.in_proposal ? <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">Y</Badge> : <Badge variant="secondary">N</Badge>}</td>
-                <td className="px-3 py-1.5">{it.is_amc_basis ? <Badge variant="secondary" className="bg-violet-100 text-violet-700">Y</Badge> : <span className="text-xs text-muted-foreground">—</span>}</td>
+                <td className="px-3 py-1.5">{it.in_proposal ? <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">Y</Badge> : <Badge variant="secondary">N</Badge>}</td>
+                <td className="px-3 py-1.5">{it.is_amc_basis ? <Badge variant="secondary" className="bg-violet-100 text-violet-700 dark:text-violet-300 dark:bg-violet-500/15 dark:text-violet-300">Y</Badge> : <span className="text-xs text-muted-foreground">—</span>}</td>
                 <td className="px-3 py-1.5 text-xs">{it.category.replace(/ \(.*\)/, "")}</td>
                 <td className="px-3 py-1.5 min-w-56">
                   <div>{it.description}</div>
                   <div className="text-xs text-muted-foreground font-mono space-x-2">
                     {it.part_no && <span>{it.part_no}</span>}
                     {[it.item_grouping, it.product_grouping, it.offer_grouping].filter(Boolean).map((g: string, i: number) => (
-                      <span key={i} className="rounded bg-slate-100 px-1">{g}</span>
+                      <span key={i} className="rounded bg-muted px-1">{g}</span>
                     ))}
                   </div>
                 </td>
@@ -419,15 +453,15 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
                 <td className="px-3 py-1.5 whitespace-nowrap">
                   {!locked && (
                     <>
-                      <button onClick={() => { setEditing(it); setEditorOpen(true); }} className="mr-2 text-slate-400 hover:text-[#2B176D]"><Pencil className="h-4 w-4" /></button>
-                      <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                      <button onClick={() => { setEditing(it); setEditorOpen(true); }} className="mr-2 text-muted-foreground/70 hover:text-primary"><Pencil className="h-4 w-4" /></button>
+                      <button onClick={() => removeItem(it.id)} className="text-muted-foreground/70 hover:text-red-600 dark:text-red-400"><Trash2 className="h-4 w-4" /></button>
                     </>
                   )}
                 </td>
               </tr>
             ))}
           </tbody>
-          <tfoot className="bg-[#2B176D]/5 font-semibold text-sm">
+          <tfoot className="bg-primary/5 font-semibold text-sm">
             <tr>
               <td colSpan={locked ? 7 : 8} className="px-3 py-2 text-right">
                 Totals — buy FCR: {fmt(sheet.summary.total.buy_fcr)} · landed AED: {fmt(sheet.summary.total.landed_aed)}
