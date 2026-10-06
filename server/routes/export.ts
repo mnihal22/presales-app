@@ -164,7 +164,12 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
       description: rep.proposal_description || rep.description,
       partNo: rep.part_no || "",
       mpg: rep.mpg_code || "",
-      qtyText: rep.months > 1 ? `${rep.qty} × ${rep.months}mo` : String(rep.qty),
+      qtyText:
+        rep.price_period === "total"
+          ? `${rep.qty} (total period)`
+          : rep.months > 1
+            ? `${rep.qty} × ${rep.months}mo`
+            : String(rep.qty),
       qty,
       unit: qty ? total / qty : total,
       total,

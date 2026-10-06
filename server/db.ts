@@ -249,6 +249,10 @@ addColumnIfMissing("projects", "round_sell_up", "round_sell_up INTEGER NOT NULL 
 addColumnIfMissing("revisions", "locked_by", "locked_by INTEGER REFERENCES users(id)");
 addColumnIfMissing("proposal_options", "discount_mode", "discount_mode INTEGER NOT NULL DEFAULT 0"); // 1 = use discounted buy chain
 addColumnIfMissing("proposal_options", "currency", "currency TEXT NOT NULL DEFAULT 'AED'"); // AED | USD
+addColumnIfMissing("costing_items", "price_period", "price_period TEXT NOT NULL DEFAULT 'monthly'"); // monthly (× months) | total (annual/whole period)
+addColumnIfMissing("quote_items", "list_unit_price", "list_unit_price REAL");       // vendor list price per unit
+addColumnIfMissing("quote_items", "extended_buy", "extended_buy REAL");             // line total from the quote sheet — unit = extended / qty
+addColumnIfMissing("revisions", "note", "note TEXT");                               // what changed in this revision
 
 // ---------------------------------------------------------------------------
 // Global reusable masters (helpers, never mandatory):
@@ -293,7 +297,19 @@ CREATE TABLE IF NOT EXISTS mpg_discounts (
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (vendor, mpg)
 );
+
+-- ATCOM legal entities customers are registered under (Dubai / Abu Dhabi / future)
+CREATE TABLE IF NOT EXISTS entities (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
+
+if ((db.prepare("SELECT COUNT(*) c FROM entities").get() as any).c === 0) {
+  const ins = db.prepare("INSERT INTO entities (name) VALUES (?)");
+  for (const n of ["ATCOM Dubai", "ATCOM Abu Dhabi"]) ins.run(n);
+}
 
 // Seed masters from the standard sheet conventions (only if empty)
 if ((db.prepare("SELECT COUNT(*) c FROM rate_card").get() as any).c === 0) {

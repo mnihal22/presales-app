@@ -68,6 +68,53 @@ quoteRoutes.get("/project/:projectId", (c) => {
   return c.json(quotes);
 });
 
+// All quotes across projects — picker for "import quotes from other proposals"
+quoteRoutes.get("/all", (c) => {
+  const rows = db
+    .prepare(
+      `SELECT q.id, q.vendor, q.reference, q.currency, q.created_at, q.project_id,
+              p.code AS project_code, p.name AS project_name, cu.name AS customer_name,
+              (SELECT COUNT(*) FROM quote_items i WHERE i.quote_id = q.id) AS item_count,
+              (SELECT COALESCE(SUM(i.qty * i.unit_price), 0) FROM quote_items i WHERE i.quote_id = q.id) AS total
+       FROM quotes q JOIN projects p ON p.id = q.project_id LEFT JOIN customers cu ON cu.id = p.customer_id
+       ORDER BY q.created_at DESC LIMIT 300`
+    )
+    .all();
+  return c.json(rows);
+});
+
+// Copy a quote (with all items) into another project
+const copySchema = z.object({ projectId: z.number(), revisionId: z.number().optional().nullable() });
+
+quoteRoutes.post("/:id/copy-to", async (c) => {
+  const id = Number(c.req.param("id"));
+  const q = db.prepare("SELECT * FROM quotes WHERE id = ?").get(id) as any;
+  if (!q) return c.json({ error: "not found" }, 404);
+  const user = c.get("user");
+  const parsed = copySchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "invalid input" }, 400);
+  const d = parsed.data;
+  if (!canAccessProject(user, q.project_id) || !canAccessProject(user, d.projectId))
+    return c.json({ error: "forbidden" }, 403);
+  if (d.projectId === q.project_id) return c.json({ error: "quote is already in this project" }, 400);
+  const srcProject = db.prepare("SELECT code FROM projects WHERE id = ?").get(q.project_id) as any;
+
+  const tx = db.transaction(() => {
+    const res = db
+      .prepare("INSERT INTO quotes (project_id, revision_id, vendor, reference, currency, notes, created_by) VALUES (?,?,?,?,?,?,?)")
+      .run(d.projectId, d.revisionId ?? null, q.vendor, q.reference, q.currency,
+        `${q.notes ? q.notes + " · " : ""}Copied from ${srcProject?.code ?? "another project"}`, user.id);
+    const newId = Number(res.lastInsertRowid);
+    for (const it of db.prepare("SELECT * FROM quote_items WHERE quote_id = ? ORDER BY line_no").all(id) as any[]) {
+      db.prepare("INSERT INTO quote_items (quote_id, line_no, description, part_no, qty, unit_price, list_unit_price, extended_buy, lead_time, notes) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        .run(newId, it.line_no, it.description, it.part_no, it.qty, it.unit_price, it.list_unit_price, it.extended_buy, it.lead_time, it.notes);
+    }
+    logActivity({ projectId: d.projectId, userId: user.id, action: "quote.copied_in", entityType: "quote", entityId: newId, details: `${q.vendor} — from ${srcProject?.code}` });
+    return newId;
+  });
+  return c.json({ id: tx() }, 201);
+});
+
 quoteRoutes.get("/:id", (c) => {
   const id = Number(c.req.param("id"));
   const quote = db.prepare("SELECT * FROM quotes WHERE id = ?").get(id) as any;

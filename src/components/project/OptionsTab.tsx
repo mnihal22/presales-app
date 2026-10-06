@@ -113,14 +113,23 @@ export default function OptionsTab({ projectId, revision, costingItems }: any) {
         </p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild><Button onClick={() => openEditor()}><Plus className="h-4 w-4 mr-1" /> New option</Button></DialogTrigger>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="sm:max-w-4xl">
             <DialogHeader><DialogTitle>{editId ? "Edit option" : "New proposal option"}</DialogTitle></DialogHeader>
             <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-sm font-medium">Option name *</label>
                   <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Option A — Base" /></div>
                 <div><label className="text-sm font-medium">Template</label>
-                  <Select value={templateId} onValueChange={setTemplateId}>
+                  <Select value={templateId} onValueChange={(v) => {
+                    setTemplateId(v);
+                    // New options inherit the template's discount defaults (editable below)
+                    if (!editId) {
+                      const t = templates.find((x) => String(x.id) === v);
+                      const c = t?.config || {};
+                      setDiscountMode(!!c.discountMode);
+                      setDiscountDisplay(c.discountDisplay === "line_item" ? "line_item" : "lumpsum");
+                    }
+                  }}>
                     <SelectTrigger><SelectValue placeholder="Default template" /></SelectTrigger>
                     <SelectContent>{templates.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}</SelectContent>
                   </Select></div>

@@ -26,7 +26,7 @@ const schema = z.object({
   notes: z.string().optional().nullable(),
 });
 
-customerRoutes.post("/", requireRole("admin", "sales"), async (c) => {
+customerRoutes.post("/", requireRole("admin", "sales", "presales"), async (c) => {
   const parsed = schema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
   const d = parsed.data;
@@ -37,7 +37,7 @@ customerRoutes.post("/", requireRole("admin", "sales"), async (c) => {
   return c.json({ id: Number(res.lastInsertRowid) }, 201);
 });
 
-customerRoutes.put("/:id", requireRole("admin", "sales"), async (c) => {
+customerRoutes.put("/:id", requireRole("admin", "sales", "presales"), async (c) => {
   const id = Number(c.req.param("id"));
   const parsed = schema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);

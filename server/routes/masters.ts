@@ -18,6 +18,7 @@ function canWrite(user: any): boolean {
 }
 
 const rateSchema = z.object({ code: z.string().min(1), description: z.string().optional().nullable(), rateAed: z.number().min(0) });
+const entitySchema = z.object({ name: z.string().min(1) });
 const supportSchema = z.object({ name: z.string().min(1), amcPct: z.number() });
 const mpgSchema = z.object({
   vendor: z.string().min(1),
@@ -42,6 +43,11 @@ const TABLES: Record<string, { table: string; schema: z.ZodTypeAny; cols: (d: an
     table: "mpg_discounts",
     schema: mpgSchema,
     cols: (d) => [["vendor", "mpg", "category", "type", "discount_pct"], [d.vendor, d.mpg, d.category ?? null, d.type ?? null, d.discountPct]],
+  },
+  entities: {
+    table: "entities",
+    schema: entitySchema,
+    cols: (d) => [["name"], [d.name]],
   },
 };
 

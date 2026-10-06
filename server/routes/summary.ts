@@ -6,7 +6,7 @@ import { computeRow, summarize, calcOptsForProject, type CostingRow } from "../c
 export const summaryRoutes = new Hono();
 summaryRoutes.use("*", requireAuth);
 
-// Summary for a revision: buy FCR / landed AED / GP / GPM / sale per category
+// Summary for a revision: buy USD / landed AED / GP / GPM / sale per category
 summaryRoutes.get("/revision/:revisionId", (c) => {
   const revisionId = Number(c.req.param("revisionId"));
   const rev = db.prepare("SELECT * FROM revisions WHERE id = ?").get(revisionId) as any;

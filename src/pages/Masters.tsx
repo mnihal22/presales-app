@@ -175,17 +175,61 @@ function MpgDiscounts() {
   );
 }
 
+function Entities() {
+  const { rows, reload } = useMaster("entities");
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+
+  const add = async () => {
+    setError("");
+    try {
+      await api("/api/masters/entities", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
+      setName("");
+      reload();
+    } catch (e: any) { setError(e.message); }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardTitle className="text-base">ATCOM entities</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">Customers are segregated by the ATCOM entity they are registered with. Add more entities here as the business grows.</p>
+        <table className="w-full text-sm">
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="py-1.5">{r.name}</td>
+                <td className="text-right">
+                  <Button variant="ghost" size="sm" onClick={async () => { await api(`/api/masters/entities/${r.id}`, { method: "DELETE" }); reload(); }}>
+                    <Trash2 className="h-4 w-4 text-muted-foreground/70" />
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+          <div><label className="text-xs text-muted-foreground">Entity name</label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ATCOM Dubai" /></div>
+          <Button size="sm" disabled={!name.trim()} onClick={add}><Plus className="h-4 w-4" /></Button>
+        </div>
+        <ErrorLine msg={error} />
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Masters() {
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold">Masters</h1>
         <p className="text-sm text-muted-foreground">
-          Global reusable tables — rate card, support-type AMC percentages, vendor MPG discounts.
+          Global reusable tables — ATCOM entities, rate card, support-type AMC percentages, vendor MPG discounts.
           These are helpers for faster, consistent costing; items can always be overridden manually.
         </p>
       </div>
       <div className="grid md:grid-cols-2 gap-4">
+        <Entities />
         <RateCard />
         <SupportTypes />
         <MpgDiscounts />

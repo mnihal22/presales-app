@@ -98,9 +98,9 @@ export function requireRole(...roles: Role[]) {
   };
 }
 
-/** Admins and sales can see all projects; presales only projects they are a member of. */
+/** All internal roles can access all projects by default (sales ≈ presales; refine later). */
 export function canAccessProject(user: AuthUser, projectId: number): boolean {
-  if (user.role === "admin" || user.role === "sales") return true;
+  if (user.role === "admin" || user.role === "sales" || user.role === "presales") return true;
   const mr = getModuleRole(user, "presales");
   if (mr === "admin" || mr === "manager") return true;
   const row = db
@@ -121,8 +121,8 @@ export function getModuleRole(user: AuthUser, module: string): ModuleRole | null
   // Sensible defaults from the global role when no override exists
   const row = db.prepare("SELECT role FROM module_roles WHERE user_id = ? AND module = ?").get(user.id, module) as any;
   if (row) return row.role as ModuleRole;
-  if (user.role === "sales") return "manager";
-  return "member"; // presales default
+  if (user.role === "sales" || user.role === "presales") return "manager";
+  return "member";
 }
 
 export function moduleRoleAtLeast(user: AuthUser, module: string, min: ModuleRole): boolean {
@@ -130,9 +130,10 @@ export function moduleRoleAtLeast(user: AuthUser, module: string, min: ModuleRol
   return r !== null && MODULE_RANK[r] >= MODULE_RANK[min];
 }
 
-/** Who may unlock a locked revision: global admin, presales-module admin, or the user who locked it. */
+/** Who may unlock a locked revision: global admin, presales (module admin/manager or global role), or the user who locked it. */
 export function canUnlockRevision(user: AuthUser, rev: any): boolean {
   if (user.role === "admin") return true;
+  if (user.role === "presales") return true; // presales owns the costing sheet — a bit more modify privilege than sales
   if (moduleRoleAtLeast(user, "presales", "admin")) return true;
   return rev.locked_by != null && rev.locked_by === user.id;
 }

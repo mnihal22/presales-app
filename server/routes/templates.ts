@@ -20,7 +20,7 @@ const schema = z.object({
   config: z.record(z.string(), z.any()).default({}),
 });
 
-templateRoutes.post("/", requireRole("admin", "sales"), async (c) => {
+templateRoutes.post("/", requireRole("admin", "sales", "presales"), async (c) => {
   const parsed = schema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
   const d = parsed.data;
@@ -30,7 +30,7 @@ templateRoutes.post("/", requireRole("admin", "sales"), async (c) => {
   return c.json({ id: Number(res.lastInsertRowid) }, 201);
 });
 
-templateRoutes.put("/:id", requireRole("admin", "sales"), async (c) => {
+templateRoutes.put("/:id", requireRole("admin", "sales", "presales"), async (c) => {
   const id = Number(c.req.param("id"));
   const parsed = schema.partial().safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
@@ -41,14 +41,14 @@ templateRoutes.put("/:id", requireRole("admin", "sales"), async (c) => {
   return c.json({ ok: true });
 });
 
-templateRoutes.post("/:id/set-default", requireRole("admin", "sales"), (c) => {
+templateRoutes.post("/:id/set-default", requireRole("admin", "sales", "presales"), (c) => {
   const id = Number(c.req.param("id"));
   db.prepare("UPDATE templates SET is_default = 0 WHERE module = 'presales'").run();
   db.prepare("UPDATE templates SET is_default = 1 WHERE id = ?").run(id);
   return c.json({ ok: true });
 });
 
-templateRoutes.delete("/:id", requireRole("admin", "sales"), (c) => {
+templateRoutes.delete("/:id", requireRole("admin", "sales", "presales"), (c) => {
   const id = Number(c.req.param("id"));
   const t = db.prepare("SELECT is_default FROM templates WHERE id = ?").get(id) as any;
   if (t?.is_default) return c.json({ error: "cannot delete the default template" }, 400);

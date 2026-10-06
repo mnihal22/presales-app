@@ -21,6 +21,7 @@ export interface ItemForm {
   itemGrouping: string; productGrouping: string; offerGrouping: string; inProposal: boolean;
   mapNo: string; aplUnitPrice: string; aplDiscountPct: string; notes: string;
   isAmcBasis: boolean; mpgCode: string; rowColor: string; discSellOverride: string;
+  pricePeriod: string; // 'monthly' (unit × months) | 'total' (annual / whole term)
 }
 
 export const ROW_COLORS: { key: string; label: string; swatch: string }[] = [
@@ -37,10 +38,11 @@ export const emptyItemForm: ItemForm = {
   category: "Products (CAPEX)", description: "", vendor: "", qty: "1", unitCost: "", marginPct: "25",
   partNo: "", bomQty: "1", months: "1", serviceTerms: "", listUnitPrice: "",
   partnerDiscountPct: "0", discountedUnitBuyPrice: "", proposalDescription: "",
-  exchRate: "1", landedFactor: "1", sellOverride: "", isAmc: false, isSwSupport: false,
+  exchRate: "3.68", landedFactor: "1", sellOverride: "", isAmc: false, isSwSupport: false,
   itemGrouping: "", productGrouping: "", offerGrouping: "", inProposal: true,
   mapNo: "", aplUnitPrice: "", aplDiscountPct: "0", notes: "",
   isAmcBasis: false, mpgCode: "", rowColor: "", discSellOverride: "",
+  pricePeriod: "monthly",
 };
 
 export function itemToForm(it: any): ItemForm {
@@ -50,13 +52,14 @@ export function itemToForm(it: any): ItemForm {
     unitCost: s(it.unit_cost), marginPct: s(it.margin_pct), partNo: it.part_no || "", bomQty: s(it.bom_qty ?? 1),
     months: s(it.months ?? 1), serviceTerms: it.service_terms || "", listUnitPrice: s(it.list_unit_price),
     partnerDiscountPct: s(it.partner_discount_pct ?? 0), discountedUnitBuyPrice: s(it.discounted_unit_buy_price),
-    proposalDescription: it.proposal_description || "", exchRate: s(it.exch_rate ?? 1), landedFactor: s(it.landed_factor ?? 1),
+    proposalDescription: it.proposal_description || "", exchRate: s(it.exch_rate ?? 3.68), landedFactor: s(it.landed_factor ?? 1),
     sellOverride: s(it.sell_override), isAmc: !!it.is_amc, isSwSupport: !!it.is_sw_support,
     itemGrouping: it.item_grouping || "", productGrouping: it.product_grouping || "", offerGrouping: it.offer_grouping || "",
     inProposal: !!it.in_proposal, mapNo: it.map_no || "", aplUnitPrice: s(it.apl_unit_price),
     aplDiscountPct: s(it.apl_discount_pct ?? 0), notes: it.notes || "",
     isAmcBasis: !!it.is_amc_basis, mpgCode: it.mpg_code || "",
     rowColor: it.row_color || "", discSellOverride: s(it.disc_sell_override),
+    pricePeriod: it.price_period || "monthly",
   };
 }
 
@@ -69,13 +72,14 @@ export function formToPayload(f: ItemForm) {
     months: Number(f.months) || 1, serviceTerms: f.serviceTerms || null,
     listUnitPrice: num(f.listUnitPrice), partnerDiscountPct: Number(f.partnerDiscountPct) || 0,
     discountedUnitBuyPrice: num(f.discountedUnitBuyPrice), proposalDescription: f.proposalDescription || null,
-    exchRate: Number(f.exchRate) || 1, landedFactor: Number(f.landedFactor) || 1,
+    exchRate: Number(f.exchRate) || 3.68, landedFactor: Number(f.landedFactor) || 1,
     sellOverride: num(f.sellOverride), isAmc: f.isAmc, isSwSupport: f.isSwSupport,
     itemGrouping: f.itemGrouping || null, productGrouping: f.productGrouping || null,
     offerGrouping: f.offerGrouping || null, inProposal: f.inProposal, mapNo: f.mapNo || null,
     aplUnitPrice: num(f.aplUnitPrice), aplDiscountPct: Number(f.aplDiscountPct) || 0,
     isAmcBasis: f.isAmcBasis, mpgCode: f.mpgCode || null,
     rowColor: f.rowColor || null, discSellOverride: num(f.discSellOverride),
+    pricePeriod: f.pricePeriod || "monthly",
   };
 }
 
@@ -137,7 +141,7 @@ export default function ItemEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-6xl">
         <DialogHeader><DialogTitle>{itemId ? "Edit costing item" : "Add costing item"}</DialogTitle></DialogHeader>
         <div className="max-h-[70vh] overflow-y-auto pr-2 space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -173,20 +177,42 @@ export default function ItemEditor({
             <div className="grid grid-cols-4 gap-3">
               {numInput("qty", "Qty")}
               {numInput("bomQty", "BOM Qty")}
-              {numInput("months", "Months (term ×)")}
+              <Field label="Unit price period">
+                <Select value={f.pricePeriod} onValueChange={(v) => set({ pricePeriod: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly — unit × months</SelectItem>
+                    <SelectItem value="total">Total period — annual / whole term</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              {f.pricePeriod === "monthly" ? (
+                numInput("months", "Months (term ×)")
+              ) : (
+                <Field label="Months (term ×)">
+                  <Input disabled value="—" title="Total-period pricing: unit price is not multiplied by months" />
+                </Field>
+              )}
+            </div>
+            <div className="grid grid-cols-4 gap-3">
               <Field label="Service terms"><Input value={f.serviceTerms} onChange={(e) => set({ serviceTerms: e.target.value })} placeholder="e.g. 36 months" /></Field>
+              {f.pricePeriod === "total" && (
+                <div className="col-span-3 text-xs text-muted-foreground self-end pb-2">
+                  Total-period pricing — the unit price already covers the full term (e.g. annual or 3-year price), so it is <b>not</b> multiplied by months.
+                </div>
+              )}
             </div>
           </div>
 
           <div className="rounded-md border p-3 space-y-3">
-            <div className="text-xs font-semibold uppercase text-muted-foreground">Buy side (foreign currency)</div>
+            <div className="text-xs font-semibold uppercase text-muted-foreground">Buy side (USD by default)</div>
             <div className="grid grid-cols-4 gap-3">
               {numInput("listUnitPrice", "List unit price")}
               {numInput("partnerDiscountPct", "Partner disc. %")}
-              {numInput("unitCost", "Unit buy price (FCR)")}
+              {numInput("unitCost", "Unit buy price (USD)")}
             </div>
             <div className="grid grid-cols-4 gap-3">
-              {numInput("exchRate", "Exchange rate")}
+              {numInput("exchRate", "Exchange rate (→ AED)")}
               {numInput("landedFactor", "Landed factor")}
             </div>
           </div>
@@ -231,7 +257,7 @@ export default function ItemEditor({
               <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isSwSupport} onCheckedChange={(v) => set({ isSwSupport: !!v })} /> Software support</label>
             </div>
             {f.isAmcBasis && (
-              <p className="text-xs text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-500/10 dark:text-violet-300 rounded px-2 py-1">
+              <p className="text-xs text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-500/10 rounded px-2 py-1">
                 This item's value feeds the "% of AMC base" service calculation.
                 {f.inProposal
                   ? " It is new equipment — it also stays in the proposal and sale totals."

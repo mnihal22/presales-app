@@ -1,6 +1,8 @@
 // ---------------------------------------------------------------------------
 // Shared costing calculation engine — mirrors the Excel costing sheet.
-// Quantity basis = qty × bom_qty × months (months = service-term multiplier,
+// Quantity basis = qty × bom_qty × months for monthly-priced lines;
+// price_period = 'total' means the unit price already covers the whole term
+// (annual / total period) so months is informational only and not multiplied.
 // e.g. 36-month support contracts).
 // margin_pct is GPM (gross profit margin on the SELLING price).
 // ---------------------------------------------------------------------------
@@ -15,13 +17,14 @@ export interface CostingRow {
   description: string;
   vendor: string | null;
   qty: number;
-  unit_cost: number;         // ATCOM unit buy price (FCR)
+  unit_cost: number;         // ATCOM unit buy price (USD by default)
   margin_pct: number;        // GPM %
   notes: string | null;
   sort: number;
   part_no: string | null;
   bom_qty: number;
   months: number;
+  price_period: string;    // 'monthly' (× months) | 'total' (unit covers whole term)
   service_terms: string | null;
   list_unit_price: number | null;
   partner_discount_pct: number;
@@ -90,7 +93,7 @@ export function roundSellUp(x: number): number {
 }
 
 export function computeRow(r: CostingRow, opts: CalcOpts = {}): ComputedRow {
-  const basis = n(r.qty, 1) * n(r.bom_qty, 1) * n(r.months, 1);
+  const basis = n(r.qty, 1) * n(r.bom_qty, 1) * (r.price_period === "total" ? 1 : n(r.months, 1));
   const list = n(r.list_unit_price);
   const buy = n(r.unit_cost);
   const discBuy = r.discounted_unit_buy_price != null ? n(r.discounted_unit_buy_price) : null;

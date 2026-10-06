@@ -56,7 +56,7 @@ export default function Users() {
   // ---- per-module roles ----
   const [moduleUser, setModuleUser] = useState<any>(null);
   const [moduleRoles, setModuleRoles] = useState<Record<string, string>>({});
-  const defaultFor = (u: any) => (u?.role === "admin" ? "admin (via global admin)" : u?.role === "sales" ? "manager" : "member");
+  const defaultFor = (u: any) => (u?.role === "admin" ? "admin (via global admin)" : "manager");
 
   const openModuleRoles = async (u: any) => {
     setModuleUser(u);

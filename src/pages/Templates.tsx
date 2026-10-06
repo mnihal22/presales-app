@@ -18,6 +18,7 @@ const emptyForm = {
   name: "", description: "", layout: "standard", companyName: "ATCOM", title: "Commercial Proposal",
   accentColor: "#1F4E79", vatPct: "5", currencyLabel: "UAE Dirhams", currencyMinor: "Fils",
   showSpecialDiscount: false, specialDiscountPct: "0", amountInWords: true, footerNote: "", terms: "",
+  discountMode: false, discountDisplay: "lumpsum",
 };
 
 export default function Templates() {
@@ -41,6 +42,7 @@ export default function Templates() {
         showSpecialDiscount: !!c.showSpecialDiscount, specialDiscountPct: String(c.specialDiscountPct ?? 0),
         amountInWords: c.amountInWords ?? true, footerNote: c.footerNote || "",
         terms: (c.terms || []).join("\n"),
+        discountMode: !!c.discountMode, discountDisplay: c.discountDisplay === "line_item" ? "line_item" : "lumpsum",
       });
     } else {
       setEditId(null);
@@ -59,6 +61,7 @@ export default function Templates() {
         showSpecialDiscount: form.showSpecialDiscount, specialDiscountPct: Number(form.specialDiscountPct) || 0,
         amountInWords: form.amountInWords, footerNote: form.footerNote,
         terms: form.terms.split("\n").map((t) => t.trim()).filter(Boolean),
+        discountMode: form.discountMode, discountDisplay: form.discountDisplay,
       },
     };
     if (editId) await api(`/api/templates/${editId}`, { method: "PUT", body: JSON.stringify(body) });
@@ -76,7 +79,7 @@ export default function Templates() {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild><Button onClick={() => openEditor()}><Plus className="h-4 w-4 mr-1" /> New template</Button></DialogTrigger>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="sm:max-w-3xl">
             <DialogHeader><DialogTitle>{editId ? "Edit template" : "Create template"}</DialogTitle></DialogHeader>
             <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
               <div><label className="text-sm font-medium">Template name *</label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
@@ -107,6 +110,23 @@ export default function Templates() {
               {form.showSpecialDiscount && (
                 <div><label className="text-sm font-medium">Special discount %</label><Input type="number" value={form.specialDiscountPct} onChange={(e) => setForm({ ...form, specialDiscountPct: e.target.value })} /></div>
               )}
+              <div className="rounded-md border p-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <Switch checked={form.discountMode} onCheckedChange={(v) => setForm({ ...form, discountMode: v })} /> Discounted offer included by default
+                </label>
+                {form.discountMode && (
+                  <div><label className="text-sm font-medium">Discount presentation</label>
+                    <Select value={form.discountDisplay} onValueChange={(v) => setForm({ ...form, discountDisplay: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="lumpsum">Lump-sum discount row (normal)</SelectItem>
+                        <SelectItem value="line_item">Line-by-line discounted prices (special cases)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-1 text-xs text-muted-foreground">New proposal options created with this template start with these discount settings — still editable per option.</p>
+                  </div>
+                )}
+              </div>
               <label className="flex items-center gap-2 text-sm">
                 <Switch checked={form.amountInWords} onCheckedChange={(v) => setForm({ ...form, amountInWords: v })} /> Show amount in words
               </label>
@@ -139,7 +159,7 @@ export default function Templates() {
             {t.description && <div className="text-sm text-muted-foreground">{t.description}</div>}
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className="inline-block h-3 w-3 rounded" style={{ background: t.config?.accentColor || "#ccc" }} />
-              {LAYOUTS.find((l) => l.value === t.config?.layout)?.label || "Standard"} · VAT {t.config?.vatPct ?? 5}% {t.config?.amountInWords ? "· amount in words" : ""}
+              {LAYOUTS.find((l) => l.value === t.config?.layout)?.label || "Standard"} · VAT {t.config?.vatPct ?? 5}% {t.config?.amountInWords ? "· amount in words" : ""} {t.config?.discountMode ? `· discounted offer (${t.config?.discountDisplay === "line_item" ? "line-by-line" : "lump-sum"})` : ""}
             </div>
           </div>
         ))}

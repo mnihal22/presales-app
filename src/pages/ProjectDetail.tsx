@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, GitBranch } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { ArrowLeft, GitBranch, History } from "lucide-react";
 import CostingTab from "@/components/project/CostingTab";
 import SummaryTab from "@/components/project/SummaryTab";
 import OptionsTab from "@/components/project/OptionsTab";
@@ -33,6 +35,9 @@ export default function ProjectDetail() {
   const [activeRevisionId, setActiveRevisionId] = useState<number | null>(null);
   const [costingItems, setCostingItems] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState("costing");
+  const [revDialogOpen, setRevDialogOpen] = useState(false);
+  const [revNote, setRevNote] = useState("");
+  const [histOpen, setHistOpen] = useState(false);
 
   const load = () =>
     api<any>(`/api/projects/${id}`).then((d) => {
@@ -50,7 +55,7 @@ export default function ProjectDetail() {
 
   if (!data) return <div className="text-muted-foreground">Loading…</div>;
   const { project, members, revisions } = data;
-  const canManage = user?.role === "admin" || user?.role === "sales";
+  const canManage = user?.role === "admin" || user?.role === "sales" || user?.role === "presales";
 
   const setStatus = async (status: string) => {
     await api(`/api/projects/${id}`, { method: "PUT", body: JSON.stringify({ status }) });
@@ -58,7 +63,12 @@ export default function ProjectDetail() {
   };
 
   const newRevision = async () => {
-    const r = await api<{ id: number }>(`/api/projects/${id}/revisions`, { method: "POST" });
+    const r = await api<{ id: number }>(`/api/projects/${id}/revisions`, {
+      method: "POST",
+      body: JSON.stringify({ note: revNote.trim() || null }),
+    });
+    setRevDialogOpen(false);
+    setRevNote("");
     await load();
     setActiveRevisionId(r.id);
   };
@@ -93,11 +103,58 @@ export default function ProjectDetail() {
               </SelectContent>
             </Select>
           )}
-          <Button variant="outline" onClick={newRevision}>
+          <Button variant="outline" onClick={() => setHistOpen(true)}>
+            <History className="h-4 w-4 mr-1" /> Revision history
+          </Button>
+          <Button variant="outline" onClick={() => setRevDialogOpen(true)}>
             <GitBranch className="h-4 w-4 mr-1" /> New revision
           </Button>
         </div>
       </div>
+
+      {/* Revision creation — a note makes each version self-explanatory */}
+      <Dialog open={revDialogOpen} onOpenChange={setRevDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>New revision (R{(revisions[0]?.rev_no || 0) + 1})</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              The full costing sheet (all fields) is carried forward from {revisions[0]?.label || "the current revision"}.
+            </p>
+            <div>
+              <label className="text-sm font-medium">What changed in this revision? (note)</label>
+              <Input value={revNote} onChange={(e) => setRevNote(e.target.value)} placeholder="e.g. Updated Avaya prices after revised quote" />
+            </div>
+            <Button className="w-full" onClick={newRevision}>Create revision</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Full revision history */}
+      <Dialog open={histOpen} onOpenChange={setHistOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader><DialogTitle>Revision history — {project.code}</DialogTitle></DialogHeader>
+          <table className="w-full text-sm">
+            <thead className="border-b text-left text-xs uppercase text-muted-foreground">
+              <tr><th className="py-2 pr-3">Rev</th><th className="py-2 pr-3">Created</th><th className="py-2 pr-3">By</th><th className="py-2 pr-3">Status</th><th className="py-2">Note</th></tr>
+            </thead>
+            <tbody>
+              {revisions.map((r: any) => (
+                <tr key={r.id} className={`border-b last:border-0 ${r.id === activeRevision?.id ? "bg-accent/50" : ""}`}>
+                  <td className="py-2 pr-3 font-semibold">{r.label}{r.id === activeRevision?.id && <span className="ml-1 text-xs text-muted-foreground">(viewing)</span>}</td>
+                  <td className="py-2 pr-3">{r.created_at?.slice(0, 16)}</td>
+                  <td className="py-2 pr-3">{r.created_by_name}</td>
+                  <td className="py-2 pr-3">
+                    {r.status === "locked"
+                      ? <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">locked{r.locked_by_name ? ` by ${r.locked_by_name}` : ""}</Badge>
+                      : <Badge variant="secondary">open</Badge>}
+                  </td>
+                  <td className="py-2 text-muted-foreground">{r.note || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </DialogContent>
+      </Dialog>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>

@@ -108,6 +108,8 @@ const commitSchema = z.object({
     partNo: z.number().optional().nullable(),
     qty: z.number().optional().nullable(),
     unitPrice: z.number().optional().nullable(),
+    listUnitPrice: z.number().optional().nullable(),
+    extendedBuy: z.number().optional().nullable(),
     leadTime: z.number().optional().nullable(),
   }),
   skipRows: z.number().default(0),
@@ -128,18 +130,39 @@ importRoutes.post("/commit", async (c) => {
   const { rows } = await extractRows(storedPath, ext);
   const dataRows = rows.slice(d.skipRows);
 
-  const items: { description: string; partNo: string | null; qty: number; unitPrice: number; leadTime: string | null }[] = [];
-  for (const r of dataRows) {
+  const items: {
+    description: string; partNo: string | null; qty: number; unitPrice: number;
+    listUnitPrice: number | null; extendedBuy: number | null; leadTime: string | null;
+  }[] = [];
+  const warnings: { line: number; description: string; unitPrice: number; computedUnit: number }[] = [];
+  const cellNum = (r: any[], idx: number | null | undefined) =>
+    idx != null ? Number(String(r[idx] ?? "").replace(/[, ]/g, "")) || 0 : null;
+  dataRows.forEach((r, ri) => {
     const desc = String(r[d.mapping.description] ?? "").trim();
-    if (!desc) continue;
+    if (!desc) return;
+    const qty = d.mapping.qty != null ? cellNum(r, d.mapping.qty) || 1 : 1;
+    let unitPrice = cellNum(r, d.mapping.unitPrice);
+    const listUnitPrice = cellNum(r, d.mapping.listUnitPrice);
+    const extendedBuy = cellNum(r, d.mapping.extendedBuy);
+    // Cross-check unit price against extended buy (unit = extended ÷ qty)
+    if (extendedBuy != null && qty > 0) {
+      const computedUnit = extendedBuy / qty;
+      if (unitPrice == null || unitPrice === 0) {
+        unitPrice = computedUnit; // derive unit price when no explicit column mapped
+      } else if (Math.abs(unitPrice - computedUnit) > Math.max(0.01, Math.abs(unitPrice) * 0.005)) {
+        warnings.push({ line: d.skipRows + ri + 1, description: desc.slice(0, 60), unitPrice, computedUnit: Math.round(computedUnit * 100) / 100 });
+      }
+    }
     items.push({
       description: desc,
       partNo: d.mapping.partNo != null ? String(r[d.mapping.partNo] ?? "").trim() || null : null,
-      qty: d.mapping.qty != null ? Number(r[d.mapping.qty]) || 1 : 1,
-      unitPrice: d.mapping.unitPrice != null ? Number(r[d.mapping.unitPrice]) || 0 : 0,
+      qty,
+      unitPrice: unitPrice ?? 0,
+      listUnitPrice,
+      extendedBuy,
       leadTime: d.mapping.leadTime != null ? String(r[d.mapping.leadTime] ?? "").trim() || null : null,
     });
-  }
+  });
   if (items.length === 0) return c.json({ error: "no importable rows found — check column mapping and skip rows" }, 400);
 
   const tx = db.transaction(() => {
@@ -148,8 +171,8 @@ importRoutes.post("/commit", async (c) => {
       .run(d.projectId, d.revisionId ?? null, d.vendor, d.reference ?? null, d.currency, `Imported from ${d.filename}`, user.id);
     const quoteId = Number(qres.lastInsertRowid);
     items.forEach((item, i) => {
-      db.prepare("INSERT INTO quote_items (quote_id, line_no, description, part_no, qty, unit_price, lead_time) VALUES (?,?,?,?,?,?,?)")
-        .run(quoteId, i + 1, item.description, item.partNo, item.qty, item.unitPrice, item.leadTime);
+      db.prepare("INSERT INTO quote_items (quote_id, line_no, description, part_no, qty, unit_price, list_unit_price, extended_buy, lead_time) VALUES (?,?,?,?,?,?,?,?,?)")
+        .run(quoteId, i + 1, item.description, item.partNo, item.qty, item.unitPrice, item.listUnitPrice, item.extendedBuy, item.leadTime);
     });
     // Keep the original vendor sheet as a tracked record
     db.prepare(
@@ -163,7 +186,7 @@ importRoutes.post("/commit", async (c) => {
     return quoteId;
   });
   const quoteId = tx();
-  return c.json({ quoteId, imported: items.length }, 201);
+  return c.json({ quoteId, imported: items.length, warnings }, 201);
 });
 
 // List attachments (cost sheet records) for a project

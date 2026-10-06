@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Copy } from "lucide-react";
 
 const statusColor: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
@@ -23,6 +23,7 @@ const statusColor: Record<string, string> = {
 
 export default function Projects() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [presalesUsers, setPresalesUsers] = useState<any[]>([]);
@@ -33,7 +34,7 @@ export default function Projects() {
   const [memberIds, setMemberIds] = useState<number[]>([]);
   const [error, setError] = useState("");
 
-  const canCreate = user?.role === "admin" || user?.role === "sales";
+  const canCreate = user?.role === "admin" || user?.role === "sales" || user?.role === "presales";
 
   const load = () => api<any[]>("/api/projects").then(setProjects).catch(console.error);
   useEffect(() => {
@@ -95,6 +96,12 @@ export default function Projects() {
     });
     setEditProject(null);
     load();
+  };
+
+  const duplicateProject = async (p: any) => {
+    if (!confirm(`Duplicate ${p.code} — ${p.name}?\n\nCopies the whole quote process: revisions, costing sheets, vendor quotes, proposal options and services.\n(Attachments and tasks stay with the original.)`)) return;
+    const r = await api<{ id: number }>(`/api/projects/${p.id}/duplicate`, { method: "POST" });
+    navigate(`/projects/${r.id}`);
   };
 
   const deleteProject = async (p: any) => {
@@ -174,6 +181,9 @@ export default function Projects() {
                 <td className="px-4 py-2.5 text-muted-foreground">{p.updated_at?.slice(0, 10)}</td>
                 {canCreate && (
                   <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <Button variant="ghost" size="icon" title="Duplicate whole quote process (costing, quotes, options, services)" onClick={() => duplicateProject(p)}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
                     <Button variant="ghost" size="icon" title="Edit project" onClick={() => openEdit(p)}>
                       <Pencil className="h-4 w-4" />
                     </Button>

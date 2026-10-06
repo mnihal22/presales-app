@@ -32,6 +32,7 @@ const BULK_FIELDS = [
   { key: "productGrouping", label: "Product grouping", type: "text" },
   { key: "offerGrouping", label: "Offer grouping", type: "text" },
   { key: "rowColor", label: "Row color", type: "color" },
+  { key: "pricePeriod", label: "Unit price period", type: "period" },
   { key: "inProposal", label: "In proposal", type: "bool" },
   { key: "isAmcBasis", label: "AMC basis", type: "bool" },
   { key: "isAmc", label: "AMC line", type: "bool" },
@@ -45,7 +46,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
   const [selectedQuoteItems, setSelectedQuoteItems] = useState<number[]>([]);
   const [quoteDetail, setQuoteDetail] = useState<Record<number, any[]>>({});
   const [importMargin, setImportMargin] = useState("25");
-  const [importExch, setImportExch] = useState("1");
+  const [importExch, setImportExch] = useState("3.68");
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null); // null = new item
 
@@ -135,7 +136,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
   const doImport = async () => {
     await api(`/api/costing/${activeRevision.id}/import-from-quote`, {
       method: "POST",
-      body: JSON.stringify({ quoteItemIds: selectedQuoteItems, marginPct: Number(importMargin) || 25, exchRate: Number(importExch) || 1 }),
+      body: JSON.stringify({ quoteItemIds: selectedQuoteItems, marginPct: Number(importMargin) || 25, exchRate: Number(importExch) || 3.68 }),
     });
     setImportOpen(false);
     setSelectedQuoteItems([]);
@@ -195,7 +196,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
             <SelectContent>
               {revisions.map((r: any) => (
                 <SelectItem key={r.id} value={String(r.id)}>
-                  {r.label} · {r.created_at.slice(0, 10)} {r.status === "locked" ? "(locked)" : ""}
+                  {r.label} · {r.created_at.slice(0, 10)} {r.status === "locked" ? "(locked)" : ""}{r.note ? ` — ${r.note}` : ""}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -217,7 +218,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
             <>
               <Dialog open={importOpen} onOpenChange={setImportOpen}>
                 <DialogTrigger asChild><Button variant="outline"><FileInput className="h-4 w-4 mr-1" /> Import from quote</Button></DialogTrigger>
-                <DialogContent className="max-w-2xl">
+                <DialogContent className="sm:max-w-5xl">
                   <DialogHeader><DialogTitle>Import items from vendor quotes</DialogTitle></DialogHeader>
                   <div className="max-h-96 space-y-4 overflow-y-auto">
                     {quotes.length === 0 && <div className="text-sm text-muted-foreground">No quotes recorded for this project yet.</div>}
@@ -337,7 +338,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
               <DialogTrigger asChild>
                 <Button size="sm" variant="outline"><SlidersHorizontal className="h-3.5 w-3.5 mr-1" /> Bulk update</Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg">
+              <DialogContent className="sm:max-w-3xl">
                 <DialogHeader><DialogTitle>Bulk update {selected.length} items</DialogTitle></DialogHeader>
                 <p className="text-xs text-muted-foreground">Only fields you fill in are applied — blank fields stay untouched.</p>
                 <div className="grid grid-cols-2 gap-3 max-h-[55vh] overflow-y-auto pr-1">
@@ -364,6 +365,15 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
                           <SelectContent>
                             <SelectItem value="yes">Yes</SelectItem>
                             <SelectItem value="no">No</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                      {f.type === "period" && (
+                        <Select value={bulkValues[f.key] ?? ""} onValueChange={(v) => setBulkValues({ ...bulkValues, [f.key]: v })}>
+                          <SelectTrigger className="h-8"><SelectValue placeholder="skip" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="monthly">Monthly — unit × months</SelectItem>
+                            <SelectItem value="total">Total period — annual / whole term</SelectItem>
                           </SelectContent>
                         </Select>
                       )}
@@ -409,8 +419,8 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
               <th className="px-3 py-2">AMC base</th>
               <th className="px-3 py-2">Category</th>
               <th className="px-3 py-2">Description</th>
-              <th className="px-3 py-2 text-right">Qty × BOM × Mo</th>
-              <th className="px-3 py-2 text-right">Buy (FCR)</th>
+              <th className="px-3 py-2 text-right">Qty × BOM × Term</th>
+              <th className="px-3 py-2 text-right">Buy (USD)</th>
               <th className="px-3 py-2 text-right">Landed unit (AED)</th>
               <th className="px-3 py-2 text-right">Landed total (AED)</th>
               <th className="px-3 py-2 text-right">GPM</th>
@@ -444,7 +454,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
                     ))}
                   </div>
                 </td>
-                <td className="px-3 py-1.5 text-right whitespace-nowrap">{it.qty}{it.bom_qty > 1 ? ` × ${it.bom_qty}` : ""}{it.months > 1 ? ` × ${it.months}mo` : ""}</td>
+                <td className="px-3 py-1.5 text-right whitespace-nowrap">{it.qty}{it.bom_qty > 1 ? ` × ${it.bom_qty}` : ""}{it.price_period === "total" ? " (total)" : it.months > 1 ? ` × ${it.months}mo` : ""}</td>
                 <td className="px-3 py-1.5 text-right">{fmt(it.unit_cost)}</td>
                 <td className="px-3 py-1.5 text-right">{fmt(it.landed_unit_aed)}</td>
                 <td className="px-3 py-1.5 text-right">{fmt(it.landed_total_aed)}</td>
@@ -464,7 +474,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
           <tfoot className="bg-primary/5 font-semibold text-sm">
             <tr>
               <td colSpan={locked ? 7 : 8} className="px-3 py-2 text-right">
-                Totals — buy FCR: {fmt(sheet.summary.total.buy_fcr)} · landed AED: {fmt(sheet.summary.total.landed_aed)}
+                Totals — buy USD: {fmt(sheet.summary.total.buy_fcr)} · landed AED: {fmt(sheet.summary.total.landed_aed)}
                 {sheet.summary.amc_basis_sale_aed > 0 && <> · AMC base: {fmt(sheet.summary.amc_basis_sale_aed)}</>}
               </td>
               <td colSpan={2} className="px-3 py-2 text-right">GPM {(sheet.summary.total.gpm * 100).toFixed(1)}%</td>

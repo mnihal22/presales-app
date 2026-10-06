@@ -45,7 +45,7 @@ const itemSchema = z.object({
   partnerDiscountPct: z.number().min(0).max(100).default(0),
   discountedUnitBuyPrice: z.number().min(0).optional().nullable(),
   proposalDescription: z.string().optional().nullable(),
-  exchRate: z.number().positive().default(1),
+  exchRate: z.number().positive().default(3.68), // default cost currency is USD
   landedFactor: z.number().positive().default(1),
   sellOverride: z.number().min(0).optional().nullable(),
   isAmc: z.boolean().default(false),
@@ -62,6 +62,7 @@ const itemSchema = z.object({
   mpgCode: z.string().optional().nullable(),
   rowColor: z.string().optional().nullable(),
   discSellOverride: z.number().min(0).optional().nullable(),
+  pricePeriod: z.enum(["monthly", "total"]).default("monthly"),
 });
 
 // Patch schema for PUT/bulk — every field optional, NO defaults (zod defaults
@@ -101,13 +102,14 @@ const itemPatchSchema = z.object({
   mpgCode: z.string().optional().nullable(),
   rowColor: z.string().optional().nullable(),
   discSellOverride: z.number().min(0).optional().nullable(),
+  pricePeriod: z.enum(["monthly", "total"]).optional(),
 });
 
 const INSERT_COLS = `revision_id, quote_item_id, category, description, vendor, qty, unit_cost, margin_pct, notes, sort,
   part_no, bom_qty, months, service_terms, list_unit_price, partner_discount_pct, discounted_unit_buy_price,
   proposal_description, exch_rate, landed_factor, sell_override, is_amc, is_sw_support,
   item_grouping, product_grouping, offer_grouping, in_proposal, map_no, auto_map, apl_unit_price, apl_discount_pct, is_amc_basis,
-  mpg_code, row_color, disc_sell_override`;
+  mpg_code, row_color, disc_sell_override, price_period`;
 
 function itemValues(revisionId: number, d: z.infer<typeof itemSchema>) {
   return [
@@ -116,7 +118,7 @@ function itemValues(revisionId: number, d: z.infer<typeof itemSchema>) {
     d.partnerDiscountPct, d.discountedUnitBuyPrice ?? null, d.proposalDescription ?? null, d.exchRate, d.landedFactor,
     d.sellOverride ?? null, d.isAmc ? 1 : 0, d.isSwSupport ? 1 : 0, d.itemGrouping ?? null, d.productGrouping ?? null,
     d.offerGrouping ?? null, d.inProposal ? 1 : 0, d.mapNo ?? null, d.autoMap ?? null, d.aplUnitPrice ?? null, d.aplDiscountPct, d.isAmcBasis ? 1 : 0,
-    d.mpgCode ?? null, d.rowColor ?? null, d.discSellOverride ?? null,
+    d.mpgCode ?? null, d.rowColor ?? null, d.discSellOverride ?? null, d.pricePeriod ?? "monthly",
   ];
 }
 
@@ -170,6 +172,7 @@ costingRoutes.put("/items/:itemId", async (c) => {
     ["aplUnitPrice", d.aplUnitPrice, "apl_unit_price"], ["aplDiscountPct", d.aplDiscountPct, "apl_discount_pct"],
     ["isAmcBasis", d.isAmcBasis === undefined ? undefined : d.isAmcBasis ? 1 : 0, "is_amc_basis"],
     ["mpgCode", d.mpgCode, "mpg_code"], ["rowColor", d.rowColor, "row_color"], ["discSellOverride", d.discSellOverride, "disc_sell_override"],
+    ["pricePeriod", d.pricePeriod, "price_period"],
   ];
   const sets: string[] = [];
   const vals: any[] = [];
@@ -210,6 +213,7 @@ costingRoutes.post("/:revisionId/bulk-update", async (c) => {
     [d.inProposal === undefined ? undefined : d.inProposal ? 1 : 0, "in_proposal"],
     [d.isAmcBasis === undefined ? undefined : d.isAmcBasis ? 1 : 0, "is_amc_basis"],
     [d.mpgCode, "mpg_code"], [d.rowColor, "row_color"], [d.discSellOverride, "disc_sell_override"],
+    [d.pricePeriod, "price_period"],
   ];
   const sets: string[] = [];
   const vals: any[] = [];
