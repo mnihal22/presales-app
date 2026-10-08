@@ -253,6 +253,11 @@ addColumnIfMissing("costing_items", "price_period", "price_period TEXT NOT NULL 
 addColumnIfMissing("quote_items", "list_unit_price", "list_unit_price REAL");       // vendor list price per unit
 addColumnIfMissing("quote_items", "extended_buy", "extended_buy REAL");             // line total from the quote sheet — unit = extended / qty
 addColumnIfMissing("revisions", "note", "note TEXT");                               // what changed in this revision
+addColumnIfMissing("revisions", "committed_at", "committed_at TEXT");               // costing/proposal build marked complete
+addColumnIfMissing("revisions", "committed_by", "committed_by INTEGER REFERENCES users(id)");
+addColumnIfMissing("proposal_options", "price_view", "price_view TEXT NOT NULL DEFAULT 'unit'"); // unit | monthly | yearly | total
+addColumnIfMissing("option_items", "section", "section TEXT");               // custom proposal header (blank = category section)
+addColumnIfMissing("option_items", "custom_description", "custom_description TEXT"); // per-option customer-facing redraft
 
 // ---------------------------------------------------------------------------
 // Global reusable masters (helpers, never mandatory):

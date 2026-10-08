@@ -19,6 +19,10 @@ const SECTION_LABELS: [string, string][] = [
 ];
 
 type LayoutId = "standard" | "item_code" | "apl";
+// How prices are presented on the customer proposal:
+// unit = as costed | monthly = per-month run rate | yearly = per-year | total = whole period
+type PriceView = "unit" | "monthly" | "yearly" | "total";
+const PRICE_VIEWS: PriceView[] = ["unit", "monthly", "yearly", "total"];
 
 interface TemplateConfig {
   name: string;
@@ -74,6 +78,8 @@ interface ProposalLine {
   ddpUnit: number | null;
   ddpTotal: number | null;
   category: string;
+  section: string | null;  // custom proposal header (option-specific)
+  sources: { id: number; mapNo: string; description: string }[]; // costing items behind this line
 }
 
 interface ProposalData {
@@ -91,12 +97,14 @@ interface ProposalData {
   discountMode: boolean;
   discountDisplay: string;  // lumpsum | line_item
   optionDiscount: number;   // display currency; >0 only when lumpsum discount applies
+  priceView: PriceView;
+  totalSuffix: string;      // e.g. " — per month" appended to totals labels
   fmtMoney: (v: number) => string;
 }
 
 const USD_RATE = 3.68;
 
-function buildProposalData(revisionId: number, optionId: number | undefined, cfg: TemplateConfig): ProposalData | null {
+function buildProposalData(revisionId: number, optionId: number | undefined, cfg: TemplateConfig, priceViewOverride?: string): ProposalData | null {
   const revision = db.prepare("SELECT * FROM revisions WHERE id = ?").get(revisionId) as any;
   if (!revision) return null;
   const project = db
@@ -112,9 +120,11 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
   let option: any;
   if (optionId) {
     option = db.prepare("SELECT * FROM proposal_options WHERE id = ?").get(optionId) as any;
+    // option_items carries the per-option section header + customer-facing redraft
     rows = db
       .prepare(
-        `SELECT ci.* FROM costing_items ci JOIN option_items oi ON oi.costing_item_id = ci.id
+        `SELECT ci.*, oi.section AS opt_section, oi.custom_description AS opt_custom_description
+         FROM costing_items ci JOIN option_items oi ON oi.costing_item_id = ci.id
          WHERE oi.option_id = ? AND ci.in_proposal = 1 ORDER BY ci.sort, ci.id`
       )
       .all(optionId) as CostingRow[];
@@ -133,6 +143,10 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
   const dp = currency === "USD" ? 0 : 2;
   const fmtMoney = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
+  const pvRaw = priceViewOverride || option?.price_view || "unit";
+  const priceView: PriceView = (PRICE_VIEWS as string[]).includes(pvRaw) ? (pvRaw as PriceView) : "unit";
+  const totalSuffix = priceView === "monthly" ? " — per month" : priceView === "yearly" ? " — per year" : priceView === "total" ? " — total period" : "";
+
   // Standard vs discounted sell per row. Discount mode with "line_item" display
   // prices every line at its discounted value; "lumpsum" keeps lines at the
   // standard offer and shows one discount amount at the bottom.
@@ -149,48 +163,86 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
     groups.get(key)!.push(r);
   }
   const lines: ProposalLine[] = [];
-  let discountedSumAed = 0;
+  let discountedSum = 0; // display currency, view-scaled (for the lump-sum discount line)
   for (const [key, g] of groups) {
     const rep = g[0];
     const totalAed = g.reduce((s, r) => s + effTotal(r), 0);
-    discountedSumAed += g.reduce((s, r) => s + discTotal(r), 0);
+    const discGroupAed = g.reduce((s, r) => s + discTotal(r), 0);
     const ddpTotalAed = g.some((r) => r.ddp_total_aed != null) ? g.reduce((s, r) => s + (r.ddp_total_aed ?? 0), 0) : null;
     const qty = rep.qty || 1;
     // USD proposals carry integer totals (template convention); AED keeps 2dp
-    const total = dp === 0 ? Math.round(totalAed / curFactor) : totalAed / curFactor;
-    const ddpTotal = ddpTotalAed != null ? (dp === 0 ? Math.round(ddpTotalAed / curFactor) : ddpTotalAed / curFactor) : null;
+    const r0 = (v: number) => (dp === 0 ? Math.round(v) : v);
+    const totalFull = r0(totalAed / curFactor);
+    const ddpTotalFull = ddpTotalAed != null ? r0(ddpTotalAed / curFactor) : null;
+    // Price view: monthly = full term ÷ months; yearly = monthly × 12; unit/total = as costed
+    const termMonths = Math.max(1, Number(rep.months) || 1);
+    const divisor = priceView === "monthly" ? termMonths : priceView === "yearly" ? termMonths / 12 : 1;
+    const total = r0(totalFull / divisor);
+    const ddpTotal = ddpTotalFull != null ? r0(ddpTotalFull / divisor) : null;
+    discountedSum += r0(r0(discGroupAed / curFactor) / divisor);
     lines.push({
       mapNo: key.startsWith("#") ? "" : key,
-      description: rep.proposal_description || rep.description,
+      // Customer-facing text: per-option redraft → item proposal description → costing description
+      description: (rep as any).opt_custom_description || rep.proposal_description || rep.description,
       partNo: rep.part_no || "",
       mpg: rep.mpg_code || "",
       qtyText:
-        rep.price_period === "total"
-          ? `${rep.qty} (total period)`
-          : rep.months > 1
-            ? `${rep.qty} × ${rep.months}mo`
-            : String(rep.qty),
+        priceView !== "unit"
+          ? String(rep.qty)
+          : rep.price_period === "total"
+            ? `${rep.qty} (total period)`
+            : rep.months > 1
+              ? `${rep.qty} × ${rep.months}mo`
+              : String(rep.qty),
       qty,
       unit: qty ? total / qty : total,
       total,
-      aplUnit: rep.apl_unit_price != null ? rep.apl_unit_price / curFactor : null,
+      // APL unit price is stored in the item's OWN period basis (per-month for
+      // monthly lines, whole-term for total lines) — its divisor differs from
+      // the full-term total divisor above.
+      aplUnit: rep.apl_unit_price != null
+        ? r0(rep.apl_unit_price / curFactor /
+            (priceView === "monthly" ? (rep.price_period === "monthly" ? 1 : termMonths)
+            : priceView === "yearly" ? (rep.price_period === "monthly" ? 1 / 12 : termMonths / 12)
+            : priceView === "total" ? (rep.price_period === "monthly" ? termMonths : 1)
+            : 1))
+        : null,
       aplDiscPct: rep.apl_discount_pct || 0,
       ddpUnit: ddpTotal != null && qty ? ddpTotal / qty : null,
       ddpTotal,
       category: rep.category,
+      section: ((rep as any).opt_section as string | null)?.trim() || null,
+      sources: g.map((r) => ({ id: r.id, mapNo: r.map_no || "", description: r.description })),
     });
   }
 
-  const sections = SECTION_LABELS.map(([cat, label]) => ({
-    label,
-    rows: lines.filter((r) => r.category === cat || (!SECTION_LABELS.some(([cc]) => cc === r.category) && cat === "Products (CAPEX)")),
-  })).filter((s) => s.rows.length > 0);
+  const catLabel = (cat: string) =>
+    SECTION_LABELS.find(([c]) => c === cat)?.[1] ?? SECTION_LABELS[0][1];
+
+  let sections: { label: string; rows: ProposalLine[] }[];
+  if (optionId && lines.some((l) => l.section)) {
+    // Custom headers in play: group by them (first-appearance order); lines
+    // without a custom header fall back to their category section.
+    const order: string[] = [];
+    const bySec = new Map<string, ProposalLine[]>();
+    for (const l of lines) {
+      const lbl = l.section || catLabel(l.category);
+      if (!bySec.has(lbl)) { bySec.set(lbl, []); order.push(lbl); }
+      bySec.get(lbl)!.push(l);
+    }
+    sections = order.map((label) => ({ label, rows: bySec.get(label)! }));
+  } else {
+    sections = SECTION_LABELS.map(([cat, label]) => ({
+      label,
+      rows: lines.filter((r) => r.category === cat || (!SECTION_LABELS.some(([cc]) => cc === r.category) && cat === "Products (CAPEX)")),
+    })).filter((s) => s.rows.length > 0);
+  }
 
   const totalSale = lines.reduce((s, r) => s + r.total, 0);
   // Lump-sum option discount: difference between standard and discounted offer,
   // shown as one discount line. (Line-item mode already priced lines discounted.)
   const optionDiscount = discountMode && discountDisplay === "lumpsum"
-    ? Math.max(0, totalSale - (dp === 0 ? Math.round(discountedSumAed / curFactor) : discountedSumAed / curFactor))
+    ? Math.max(0, totalSale - discountedSum)
     : 0;
   const afterOptionDiscount = totalSale - optionDiscount;
   const r0 = (v: number) => (dp === 0 ? Math.round(v) : v); // whole-dollar totals for USD
@@ -201,19 +253,21 @@ function buildProposalData(revisionId: number, optionId: number | undefined, cfg
   const currencyLabel = currency === "USD" ? "US Dollars" : cfg.currencyLabel;
   const currencyMinor = currency === "USD" ? "Cents" : cfg.currencyMinor;
 
-  return { project, revision, option, sections, totalSale, discountedTotal, vatAmount, grandTotal, currency, currencyLabel, currencyMinor, discountMode, discountDisplay, optionDiscount, fmtMoney };
+  return { project, revision, option, sections, totalSale, discountedTotal, vatAmount, grandTotal, currency, currencyLabel, currencyMinor, discountMode, discountDisplay, optionDiscount, priceView, totalSuffix, fmtMoney };
 }
 
-// Column definitions per layout
-function layoutColumns(layout: LayoutId) {
+// Column definitions per layout — unit/total headers follow the price view
+function layoutColumns(layout: LayoutId, view: PriceView = "unit") {
+  const unitLabel = view === "monthly" ? "Unit Price / month" : view === "yearly" ? "Unit Price / year" : view === "total" ? "Unit Price (period)" : "Unit Price";
+  const totalLabel = view === "monthly" ? "Monthly Total" : view === "yearly" ? "Yearly Total" : view === "total" ? "Total Price (period)" : "Total Price";
   if (layout === "item_code")
     return {
-      headers: ["Item", "Item Code", "Description", "Unit Price", "Qty", "Total Price"],
+      headers: ["Item", "Item Code", "Description", unitLabel, "Qty", totalLabel],
       values: (r: ProposalLine, idx: string, f: (v: number) => string) => [r.mapNo || idx, r.partNo, r.description, f(r.unit), r.qtyText, f(r.total)],
     };
   if (layout === "apl")
     return {
-      headers: ["Item", "MPG", "Description", "APL Unit Price", "Disc. on APL %", "DDP Unit Price", "Qty", "DDP Total Price"],
+      headers: ["Item", "MPG", "Description", `APL ${unitLabel}`, "Disc. on APL %", `DDP ${unitLabel}`, "Qty", `DDP ${totalLabel}`],
       values: (r: ProposalLine, idx: string, f: (v: number) => string) => [
         r.mapNo || idx, r.mpg || r.partNo, r.description,
         r.aplUnit != null ? f(r.aplUnit) : "NA",
@@ -224,7 +278,7 @@ function layoutColumns(layout: LayoutId) {
       ],
     };
   return {
-    headers: ["Item", "Description", "Unit Price", "Qty", "Total Price"],
+    headers: ["Item", "Description", unitLabel, "Qty", totalLabel],
     values: (r: ProposalLine, idx: string, f: (v: number) => string) => [r.mapNo || idx, r.description, f(r.unit), r.qtyText, f(r.total)],
   };
 }
@@ -239,16 +293,76 @@ exportRoutes.get("/option/:id", (c) => {
   return handleExport(c, opt.revision_id, optionId, templateId);
 });
 
+// Full proposal BOQ as JSON — the web UI renders exactly what the exports produce
+exportRoutes.get("/revision/:id/boq", (c) => handleBoq(c, Number(c.req.param("id")), undefined));
+exportRoutes.get("/option/:id/boq", (c) => {
+  const optionId = Number(c.req.param("id"));
+  const opt = db.prepare("SELECT * FROM proposal_options WHERE id = ?").get(optionId) as any;
+  if (!opt) return c.json({ error: "not found" }, 404);
+  const templateId = c.req.query("templateId") ? Number(c.req.query("templateId")) : (opt.template_id ?? undefined);
+  return handleBoq(c, opt.revision_id, optionId, templateId);
+});
+
+async function handleBoq(c: any, revisionId: number, optionId?: number, templateIdOverride?: number) {
+  const templateId = templateIdOverride ?? (c.req.query("templateId") ? Number(c.req.query("templateId")) : undefined);
+  const cfg = getTemplateConfig(templateId);
+  const data = buildProposalData(revisionId, optionId, cfg, c.req.query("priceView") || undefined);
+  if (!data) return c.json({ error: "not found" }, 404);
+  if (!canAccessProject(c.get("user"), data.revision.project_id)) return c.json({ error: "forbidden" }, 403);
+
+  const cols = layoutColumns(cfg.layout, data.priceView);
+  const sections: { no: number; label: string; rows: { cells: string[]; sources: { id: number; mapNo: string; description: string }[] }[] }[] = [];
+  let sectionNo = 0;
+  for (const sec of data.sections) {
+    sectionNo++;
+    sections.push({
+      no: sectionNo,
+      label: sec.label,
+      rows: sec.rows.map((row, i) => ({
+        cells: cols.values(row, `${sectionNo}.${String(i + 1).padStart(2, "0")}`, data.fmtMoney).map(String),
+        sources: row.sources,
+      })),
+    });
+  }
+  const totals: [string, string][] = [[`Total Investment${data.totalSuffix} (${data.currencyLabel})`, data.fmtMoney(data.totalSale)]];
+  if (data.optionDiscount > 0) {
+    totals.push(["Special Discount", `-${data.fmtMoney(data.optionDiscount)}`]);
+    totals.push([`Total after Discount (${data.currencyLabel})`, data.fmtMoney(data.totalSale - data.optionDiscount)]);
+  }
+  if (cfg.showSpecialDiscount) totals.push([`Total after Special Discount (${cfg.specialDiscountPct}%)`, data.fmtMoney(data.discountedTotal)]);
+  totals.push([`${cfg.vatPct}% VAT Charges`, data.fmtMoney(data.vatAmount)]);
+  totals.push([`Total Investment including VAT (${data.currencyLabel})`, data.fmtMoney(data.grandTotal)]);
+
+  return c.json({
+    meta: {
+      companyName: cfg.companyName, title: cfg.title,
+      customer: data.project.customer_name || "-",
+      project: `${data.project.code} — ${data.project.name}`,
+      revision: data.revision.label || `R${data.revision.rev_no}`,
+      option: data.option?.name ?? null,
+      offerDate: new Date().toISOString().slice(0, 10),
+      currency: data.currencyLabel, accountManager: data.project.owner_name,
+    },
+    template: cfg.name, layout: cfg.layout,
+    headers: cols.headers, sections, totals,
+    amountInWords: cfg.amountInWords ? `(In Words: ${amountInWords(data.grandTotal, data.currencyLabel, data.currencyMinor)})` : null,
+    footerNote: cfg.footerNote ?? null, terms: cfg.terms,
+    currency: data.currency, priceView: data.priceView,
+    discountMode: data.discountMode, discountDisplay: data.discountDisplay,
+  });
+}
+
 async function handleExport(c: any, revisionId: number, optionId?: number, templateIdOverride?: number) {
   const format = c.req.query("format") || "xlsx";
   const templateId = templateIdOverride ?? (c.req.query("templateId") ? Number(c.req.query("templateId")) : undefined);
   const cfg = getTemplateConfig(templateId);
 
-  const data = buildProposalData(revisionId, optionId, cfg);
+  const data = buildProposalData(revisionId, optionId, cfg, c.req.query("priceView") || undefined);
   if (!data) return c.json({ error: "not found" }, 404);
   if (!canAccessProject(c.get("user"), data.revision.project_id)) return c.json({ error: "forbidden" }, 403);
 
-  const filename = `${data.project.code}-${data.revision.label || "R" + data.revision.rev_no}${data.option ? "-" + data.option.name.replace(/\s+/g, "") : ""}-proposal`;
+  const filename = `${data.project.code}-${data.revision.label || "R" + data.revision.rev_no}${data.option ? "-" + data.option.name.replace(/\s+/g, "") : ""}-proposal`
+    .replace(/[—–]/g, "-").replace(/[^\x20-\x7E]/g, ""); // HTTP headers are latin-1 only
   logActivity({ projectId: data.project.id, userId: c.get("user").id, action: "proposal.exported", entityType: "revision", entityId: revisionId, details: `${format.toUpperCase()} · ${cfg.name}${data.option ? " · " + data.option.name : ""}` });
 
   if (format === "xlsx") return exportXlsx(c, cfg, data, filename);
@@ -264,7 +378,7 @@ async function exportXlsx(c: any, cfg: TemplateConfig, d: ProposalData, filename
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Proposal");
   const accent = cfg.accentColor.replace("#", "FF");
-  const cols = layoutColumns(cfg.layout);
+  const cols = layoutColumns(cfg.layout, d.priceView);
   const ncols = cols.headers.length;
 
   ws.columns = cols.headers.map((h, i) => ({ width: i === 0 ? 7 : h === "Description" ? 48 : 16 }));
@@ -327,7 +441,7 @@ async function exportXlsx(c: any, cfg: TemplateConfig, d: ProposalData, filename
 
   // Totals block
   const totalsRows: [string, number | string][] = [
-    [`Total Investment (${d.currencyLabel})`, d.fmtMoney(d.totalSale)],
+    [`Total Investment${d.totalSuffix} (${d.currencyLabel})`, d.fmtMoney(d.totalSale)],
   ];
   if (d.optionDiscount > 0) {
     totalsRows.push(["Special Discount", `-${d.fmtMoney(d.optionDiscount)}`]);
@@ -374,7 +488,7 @@ async function exportXlsx(c: any, cfg: TemplateConfig, d: ProposalData, filename
 // Word
 // ---------------------------------------------------------------------------
 async function exportDocx(c: any, cfg: TemplateConfig, d: ProposalData, filename: string) {
-  const cols = layoutColumns(cfg.layout);
+  const cols = layoutColumns(cfg.layout, d.priceView);
   const cell = (text: string, bold = false) =>
     new TableCell({ children: [new Paragraph({ children: [new TextRun({ text, bold })] })] });
 
@@ -395,7 +509,7 @@ async function exportDocx(c: any, cfg: TemplateConfig, d: ProposalData, filename
     });
   }
 
-  const totals: [string, string][] = [[`Total Investment (${d.currencyLabel})`, d.fmtMoney(d.totalSale)]];
+  const totals: [string, string][] = [[`Total Investment${d.totalSuffix} (${d.currencyLabel})`, d.fmtMoney(d.totalSale)]];
   if (d.optionDiscount > 0) {
     totals.push(["Special Discount", `-${d.fmtMoney(d.optionDiscount)}`]);
     totals.push([`Total after Discount (${d.currencyLabel})`, d.fmtMoney(d.totalSale - d.optionDiscount)]);
@@ -455,7 +569,7 @@ async function exportPdf(c: any, cfg: TemplateConfig, d: ProposalData, filename:
   doc.on("data", (ch) => chunks.push(ch));
   const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  const cols = layoutColumns(cfg.layout);
+  const cols = layoutColumns(cfg.layout, d.priceView);
   const ncols = cols.headers.length;
   const tableWidth = 515;
   const startX = 40;
@@ -504,7 +618,7 @@ async function exportPdf(c: any, cfg: TemplateConfig, d: ProposalData, filename:
   }
   y += 6;
 
-  const totals: [string, string][] = [[`Total Investment (${d.currencyLabel})`, d.fmtMoney(d.totalSale)]];
+  const totals: [string, string][] = [[`Total Investment${d.totalSuffix} (${d.currencyLabel})`, d.fmtMoney(d.totalSale)]];
   if (d.optionDiscount > 0) {
     totals.push(["Special Discount", `-${d.fmtMoney(d.optionDiscount)}`]);
     totals.push([`Total after Discount (${d.currencyLabel})`, d.fmtMoney(d.totalSale - d.optionDiscount)]);

@@ -6,8 +6,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Lock, LockOpen, Plus, Trash2, FileInput, Pencil, Search, X, SlidersHorizontal } from "lucide-react";
+import { Lock, LockOpen, Plus, Trash2, FileInput, Pencil, Search, X, SlidersHorizontal, CheckCircle2, Undo2 } from "lucide-react";
 import ItemEditor, { emptyItemForm, itemToForm } from "./ItemEditor";
+
+const PS_CATEGORY = "Professional Services";
 
 const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -70,6 +72,7 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
   const [page, setPage] = useState(0);
 
   const locked = activeRevision?.status === "locked";
+  const committed = !!activeRevision?.committed_at;
 
   const load = () => api(`/api/costing/${activeRevision.id}`).then((s) => { setSheet(s); setSelected([]); }).catch(console.error);
 
@@ -116,13 +119,36 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
   if (!activeRevision || !sheet) return <div className="py-6 text-muted-foreground">No revision selected.</div>;
 
   const removeItem = async (itemId: number) => {
-    await api(`/api/costing/items/${itemId}`, { method: "DELETE" });
-    load();
+    try {
+      await api(`/api/costing/items/${itemId}`, { method: "DELETE" });
+      load();
+    } catch (e: any) { alert(e.message); }
   };
 
   const lockRevision = async () => {
     await api(`/api/projects/${projectId}/revisions/${activeRevision.id}/lock`, { method: "POST" });
     onChanged();
+  };
+
+  const commitRevision = async () => {
+    if (!confirm(
+      "Commit this revision? This states the costing & proposal build is COMPLETE.\n\n" +
+      "Afterwards only margins and sell-price adjusters (GPM, sell overrides, APL/discounted sell) stay editable " +
+      "to adjust the sale value, and Professional Services lines can still be added or changed. " +
+      "Everything else is frozen until an admin / presales un-commits."
+    )) return;
+    try {
+      await api(`/api/projects/${projectId}/revisions/${activeRevision.id}/commit`, { method: "POST" });
+      onChanged();
+    } catch (e: any) { alert(e.message); }
+  };
+
+  const uncommitRevision = async () => {
+    if (!confirm("Un-commit this revision? The full costing sheet becomes editable again.")) return;
+    try {
+      await api(`/api/projects/${projectId}/revisions/${activeRevision.id}/uncommit`, { method: "POST" });
+      onChanged();
+    } catch (e: any) { alert(e.message); }
   };
 
   const toggleQuoteItem = async (quoteId: number, itemId: number, checked: boolean) => {
@@ -179,11 +205,12 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
   };
 
   const bulkDelete = async () => {
-    if (!confirm(`Delete ${selected.length} selected items? This cannot be undone.`)) return;
-    await api(`/api/costing/${activeRevision.id}/bulk-delete`, {
+    if (!confirm(`Delete ${selected.length} selected items? This cannot be undone.${committed ? " (Committed revision: only Professional Services lines will be removed.)" : ""}`)) return;
+    const r = await api<any>(`/api/costing/${activeRevision.id}/bulk-delete`, {
       method: "POST",
       body: JSON.stringify({ itemIds: selected }),
     });
+    if (r?.warning) alert(r.warning);
     load();
   };
 
@@ -202,6 +229,11 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
             </SelectContent>
           </Select>
           {locked && <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"><Lock className="h-3 w-3 mr-1" /> Locked{activeRevision.locked_by_name ? ` by ${activeRevision.locked_by_name}` : ""}</Badge>}
+          {committed && !locked && (
+            <Badge variant="secondary" className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300">
+              <CheckCircle2 className="h-3 w-3 mr-1" /> Committed{activeRevision.committed_by_name ? ` by ${activeRevision.committed_by_name}` : ""} — margins & sell price only
+            </Badge>
+          )}
           <span className="text-xs text-muted-foreground">GPM-based: sell = landed ÷ (1 − GPM)</span>
         </div>
         <div className="flex items-center gap-2">
@@ -214,8 +246,12 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
               } catch (e: any) { alert(e.message); }
             }}><LockOpen className="h-4 w-4 mr-1" /> Unlock</Button>
           )}
+          {committed && !locked && (
+            <Button variant="outline" onClick={uncommitRevision}><Undo2 className="h-4 w-4 mr-1" /> Un-commit</Button>
+          )}
           {!locked && (
             <>
+              {!committed && (
               <Dialog open={importOpen} onOpenChange={setImportOpen}>
                 <DialogTrigger asChild><Button variant="outline"><FileInput className="h-4 w-4 mr-1" /> Import from quote</Button></DialogTrigger>
                 <DialogContent className="sm:max-w-5xl">
@@ -258,7 +294,15 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
                   </div>
                 </DialogContent>
               </Dialog>
-              <Button variant="outline" onClick={() => { setEditing(null); setEditorOpen(true); }}><Plus className="h-4 w-4 mr-1" /> Add item</Button>
+              )}
+              <Button variant="outline" onClick={() => { setEditing(null); setEditorOpen(true); }}>
+                <Plus className="h-4 w-4 mr-1" /> {committed ? "Add PS line" : "Add item"}
+              </Button>
+              {!committed && (
+                <Button variant="secondary" className="bg-emerald-600 text-white hover:bg-emerald-700" onClick={commitRevision}>
+                  <CheckCircle2 className="h-4 w-4 mr-1" /> Commit costing
+                </Button>
+              )}
               <Button variant="secondary" onClick={lockRevision}><Lock className="h-4 w-4 mr-1" /> Lock revision</Button>
             </>
           )}
@@ -340,9 +384,12 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
               </DialogTrigger>
               <DialogContent className="sm:max-w-3xl">
                 <DialogHeader><DialogTitle>Bulk update {selected.length} items</DialogTitle></DialogHeader>
-                <p className="text-xs text-muted-foreground">Only fields you fill in are applied — blank fields stay untouched.</p>
+                <p className="text-xs text-muted-foreground">
+                  Only fields you fill in are applied — blank fields stay untouched.
+                  {committed && " Revision is committed: only margin / sell adjusters are available."}
+                </p>
                 <div className="grid grid-cols-2 gap-3 max-h-[55vh] overflow-y-auto pr-1">
-                  {BULK_FIELDS.map((f) => (
+                  {(committed ? BULK_FIELDS.filter((f) => ["marginPct", "rowColor", "inProposal"].includes(f.key)) : BULK_FIELDS).map((f) => (
                     <div key={f.key}>
                       <label className="text-xs font-medium">{f.label}</label>
                       {f.type === "number" && (
@@ -463,8 +510,10 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
                 <td className="px-3 py-1.5 whitespace-nowrap">
                   {!locked && (
                     <>
-                      <button onClick={() => { setEditing(it); setEditorOpen(true); }} className="mr-2 text-muted-foreground/70 hover:text-primary"><Pencil className="h-4 w-4" /></button>
-                      <button onClick={() => removeItem(it.id)} className="text-muted-foreground/70 hover:text-red-600 dark:text-red-400"><Trash2 className="h-4 w-4" /></button>
+                      <button onClick={() => { setEditing(it); setEditorOpen(true); }} className="mr-2 text-muted-foreground/70 hover:text-primary" title={committed && it.category !== PS_CATEGORY ? "Committed — margins & sell price only" : "Edit"}><Pencil className="h-4 w-4" /></button>
+                      {(!committed || it.category === PS_CATEGORY) && (
+                        <button onClick={() => removeItem(it.id)} className="text-muted-foreground/70 hover:text-red-600 dark:text-red-400"><Trash2 className="h-4 w-4" /></button>
+                      )}
                     </>
                   )}
                 </td>
@@ -507,9 +556,10 @@ export default function CostingTab({ projectId, revisions, activeRevision, onSel
       <ItemEditor
         open={editorOpen}
         onOpenChange={setEditorOpen}
-        initial={editing ? itemToForm(editing) : emptyItemForm}
+        initial={editing ? itemToForm(editing) : (committed ? { ...emptyItemForm, category: PS_CATEGORY } : emptyItemForm)}
         itemId={editing?.id}
         revisionId={activeRevision.id}
+        committed={committed}
         onSaved={load}
       />
     </div>

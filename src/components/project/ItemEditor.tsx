@@ -93,14 +93,26 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export default function ItemEditor({
-  open, onOpenChange, initial, onSaved, revisionId, itemId,
+  open, onOpenChange, initial, onSaved, revisionId, itemId, committed,
 }: {
   open: boolean; onOpenChange: (v: boolean) => void; initial: ItemForm;
-  onSaved: () => void; revisionId: number; itemId?: number;
+  onSaved: () => void; revisionId: number; itemId?: number; committed?: boolean;
 }) {
   const [f, setF] = useState<ItemForm>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // Committed revision: cost structure is frozen. Existing non-PS lines only
+  // allow sell-side adjusters; new lines are Professional Services only.
+  const isPsLine = initial.category === "Professional Services";
+  const sellSideOnly = !!committed && !!itemId && !isPsLine;
+  const psOnlyNew = !!committed && !itemId;
+  // Fields that stay editable when committed (sell-side / presentation)
+  const EDITABLE_WHEN_COMMITTED: (keyof ItemForm)[] = [
+    "marginPct", "sellOverride", "discSellOverride", "aplUnitPrice", "aplDiscountPct",
+    "notes", "proposalDescription", "inProposal",
+  ];
+  const dis = (k: keyof ItemForm) => sellSideOnly && !EDITABLE_WHEN_COMMITTED.includes(k);
 
   // reset when opening with new item
   const key = `${open}-${itemId ?? "new"}-${initial.description}`;
@@ -124,13 +136,14 @@ export default function ItemEditor({
     return () => clearTimeout(t);
   }, [f.vendor, f.mpgCode]);
   const numInput = (k: keyof ItemForm, label: string) => (
-    <Field label={label}><Input type="number" step="any" value={f[k] as string} onChange={(e) => set({ [k]: e.target.value } as any)} /></Field>
+    <Field label={label}><Input type="number" step="any" disabled={dis(k)} value={f[k] as string} onChange={(e) => set({ [k]: e.target.value } as any)} /></Field>
   );
 
   const save = async () => {
     setBusy(true); setError("");
     try {
       const payload = formToPayload(f);
+      if (psOnlyNew) payload.category = "Professional Services"; // committed revisions take PS lines only
       if (!payload.description) throw new Error("Description required");
       if (itemId) await api(`/api/costing/items/${itemId}`, { method: "PUT", body: JSON.stringify(payload) });
       else await api(`/api/costing/${revisionId}/items`, { method: "POST", body: JSON.stringify(payload) });
@@ -144,18 +157,28 @@ export default function ItemEditor({
       <DialogContent className="sm:max-w-6xl">
         <DialogHeader><DialogTitle>{itemId ? "Edit costing item" : "Add costing item"}</DialogTitle></DialogHeader>
         <div className="max-h-[70vh] overflow-y-auto pr-2 space-y-4">
+          {sellSideOnly && (
+            <div className="rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300">
+              This revision is <b>committed</b> — cost fields are frozen. Only margins and sell-price adjusters (GPM, sell overrides, APL/discounted sell) can still change.
+            </div>
+          )}
+          {psOnlyNew && (
+            <div className="rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300">
+              This revision is <b>committed</b> — new lines are added as <b>Professional Services</b> only.
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Category">
-              <Select value={f.category} onValueChange={(v) => set({ category: v })}>
+              <Select value={psOnlyNew ? "Professional Services" : f.category} onValueChange={(v) => set({ category: v })} disabled={sellSideOnly || psOnlyNew}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
-            <Field label="Vendor"><Input value={f.vendor} onChange={(e) => set({ vendor: e.target.value })} /></Field>
+            <Field label="Vendor"><Input disabled={dis("vendor")} value={f.vendor} onChange={(e) => set({ vendor: e.target.value })} /></Field>
           </div>
           <div className="grid grid-cols-2 gap-3 items-end">
             <Field label="MPG / product category code (optional)">
-              <Input value={f.mpgCode} onChange={(e) => set({ mpgCode: e.target.value })} placeholder="e.g. 1P — vendor-dependent" />
+              <Input disabled={dis("mpgCode")} value={f.mpgCode} onChange={(e) => set({ mpgCode: e.target.value })} placeholder="e.g. 1P — vendor-dependent" />
             </Field>
             {mpgHint && (
               <div className="text-xs rounded-md bg-violet-50 border border-violet-200 dark:bg-violet-500/10 dark:border-violet-500/30 px-3 py-2 flex items-center justify-between gap-2">
@@ -169,8 +192,8 @@ export default function ItemEditor({
               </div>
             )}
           </div>
-          <Field label="Description *"><Input value={f.description} onChange={(e) => set({ description: e.target.value })} /></Field>
-          <Field label="Proposal description (customer-facing, optional)"><Input value={f.proposalDescription} onChange={(e) => set({ proposalDescription: e.target.value })} /></Field>
+          <Field label="Description *"><Input disabled={dis("description")} value={f.description} onChange={(e) => set({ description: e.target.value })} /></Field>
+          <Field label="Proposal description (customer-facing, optional)"><Input disabled={dis("proposalDescription")} value={f.proposalDescription} onChange={(e) => set({ proposalDescription: e.target.value })} /></Field>
 
           <div className="rounded-md border p-3 space-y-3">
             <div className="text-xs font-semibold uppercase text-muted-foreground">Quantities &amp; terms</div>
@@ -178,7 +201,7 @@ export default function ItemEditor({
               {numInput("qty", "Qty")}
               {numInput("bomQty", "BOM Qty")}
               <Field label="Unit price period">
-                <Select value={f.pricePeriod} onValueChange={(v) => set({ pricePeriod: v })}>
+                <Select value={f.pricePeriod} onValueChange={(v) => set({ pricePeriod: v })} disabled={dis("pricePeriod")}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="monthly">Monthly — unit × months</SelectItem>
@@ -195,7 +218,7 @@ export default function ItemEditor({
               )}
             </div>
             <div className="grid grid-cols-4 gap-3">
-              <Field label="Service terms"><Input value={f.serviceTerms} onChange={(e) => set({ serviceTerms: e.target.value })} placeholder="e.g. 36 months" /></Field>
+              <Field label="Service terms"><Input disabled={dis("serviceTerms")} value={f.serviceTerms} onChange={(e) => set({ serviceTerms: e.target.value })} placeholder="e.g. 36 months" /></Field>
               {f.pricePeriod === "total" && (
                 <div className="col-span-3 text-xs text-muted-foreground self-end pb-2">
                   Total-period pricing — the unit price already covers the full term (e.g. annual or 3-year price), so it is <b>not</b> multiplied by months.
@@ -237,10 +260,10 @@ export default function ItemEditor({
           <div className="rounded-md border p-3 space-y-3">
             <div className="text-xs font-semibold uppercase text-muted-foreground">Grouping &amp; mapping</div>
             <div className="grid grid-cols-4 gap-3">
-              <Field label="Map #"><Input value={f.mapNo} onChange={(e) => set({ mapNo: e.target.value })} placeholder="SBC1.01" /></Field>
-              <Field label="Item grouping"><Input value={f.itemGrouping} onChange={(e) => set({ itemGrouping: e.target.value })} /></Field>
-              <Field label="Product grouping"><Input value={f.productGrouping} onChange={(e) => set({ productGrouping: e.target.value })} /></Field>
-              <Field label="Offer grouping"><Input value={f.offerGrouping} onChange={(e) => set({ offerGrouping: e.target.value })} placeholder="sbc1k" /></Field>
+              <Field label="Map #"><Input disabled={dis("mapNo")} value={f.mapNo} onChange={(e) => set({ mapNo: e.target.value })} placeholder="SBC1.01" /></Field>
+              <Field label="Item grouping"><Input disabled={dis("itemGrouping")} value={f.itemGrouping} onChange={(e) => set({ itemGrouping: e.target.value })} /></Field>
+              <Field label="Product grouping"><Input disabled={dis("productGrouping")} value={f.productGrouping} onChange={(e) => set({ productGrouping: e.target.value })} /></Field>
+              <Field label="Offer grouping"><Input disabled={dis("offerGrouping")} value={f.offerGrouping} onChange={(e) => set({ offerGrouping: e.target.value })} placeholder="sbc1k" /></Field>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-muted-foreground">Row color:</span>
@@ -251,10 +274,10 @@ export default function ItemEditor({
               ))}
             </div>
             <div className="flex flex-wrap gap-6">
-              <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.inProposal} onCheckedChange={(v) => set({ inProposal: !!v })} /> Include in proposal</label>
-              <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isAmcBasis} onCheckedChange={(v) => set({ isAmcBasis: !!v })} /> Counts toward AMC base</label>
-              <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isAmc} onCheckedChange={(v) => set({ isAmc: !!v })} /> AMC</label>
-              <label className="flex items-center gap-2 text-sm"><Checkbox checked={f.isSwSupport} onCheckedChange={(v) => set({ isSwSupport: !!v })} /> Software support</label>
+              <label className="flex items-center gap-2 text-sm"><Checkbox disabled={dis("inProposal")} checked={f.inProposal} onCheckedChange={(v) => set({ inProposal: !!v })} /> Include in proposal</label>
+              <label className="flex items-center gap-2 text-sm"><Checkbox disabled={dis("isAmcBasis")} checked={f.isAmcBasis} onCheckedChange={(v) => set({ isAmcBasis: !!v })} /> Counts toward AMC base</label>
+              <label className="flex items-center gap-2 text-sm"><Checkbox disabled={dis("isAmc")} checked={f.isAmc} onCheckedChange={(v) => set({ isAmc: !!v })} /> AMC</label>
+              <label className="flex items-center gap-2 text-sm"><Checkbox disabled={dis("isSwSupport")} checked={f.isSwSupport} onCheckedChange={(v) => set({ isSwSupport: !!v })} /> Software support</label>
             </div>
             {f.isAmcBasis && (
               <p className="text-xs text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-500/10 rounded px-2 py-1">

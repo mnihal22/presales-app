@@ -32,10 +32,28 @@ const schema = z.object({
   description: z.string().optional().nullable(),
   templateId: z.number().optional().nullable(),
   itemIds: z.array(z.number()).default([]),
+  // Rich per-item proposal metadata: custom section header + customer-facing redraft
+  items: z.array(z.object({
+    id: z.number(),
+    section: z.string().optional().nullable(),
+    customDescription: z.string().optional().nullable(),
+  })).optional(),
   discountMode: z.boolean().optional(),
   currency: z.enum(["AED", "USD"]).optional(),
   discountDisplay: z.enum(["lumpsum", "line_item"]).optional(),
+  priceView: z.enum(["unit", "monthly", "yearly", "total"]).optional(),
 });
+
+function insertOptionItems(optionId: number, d: { itemIds: number[]; items?: { id: number; section?: string | null; customDescription?: string | null }[] }) {
+  if (d.items) {
+    const ins = db.prepare("INSERT OR REPLACE INTO option_items (option_id, costing_item_id, section, custom_description) VALUES (?,?,?,?)");
+    for (const it of d.items) ins.run(optionId, it.id, it.section?.trim() || null, it.customDescription?.trim() || null);
+  } else {
+    for (const itemId of d.itemIds) {
+      db.prepare("INSERT OR IGNORE INTO option_items (option_id, costing_item_id) VALUES (?,?)").run(optionId, itemId);
+    }
+  }
+}
 
 optionRoutes.post("/", async (c) => {
   const parsed = schema.safeParse(await c.req.json().catch(() => null));
@@ -46,12 +64,10 @@ optionRoutes.post("/", async (c) => {
 
   const tx = db.transaction(() => {
     const res = db
-      .prepare("INSERT INTO proposal_options (project_id, revision_id, name, description, template_id, discount_mode, currency, discount_display, created_by) VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(d.projectId, d.revisionId, d.name, d.description ?? null, d.templateId ?? null, d.discountMode ? 1 : 0, d.currency ?? "AED", d.discountDisplay ?? "lumpsum", user.id);
+      .prepare("INSERT INTO proposal_options (project_id, revision_id, name, description, template_id, discount_mode, currency, discount_display, price_view, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(d.projectId, d.revisionId, d.name, d.description ?? null, d.templateId ?? null, d.discountMode ? 1 : 0, d.currency ?? "AED", d.discountDisplay ?? "lumpsum", d.priceView ?? "unit", user.id);
     const optionId = Number(res.lastInsertRowid);
-    for (const itemId of d.itemIds) {
-      db.prepare("INSERT OR IGNORE INTO option_items (option_id, costing_item_id) VALUES (?,?)").run(optionId, itemId);
-    }
+    insertOptionItems(optionId, d);
     logActivity({ projectId: d.projectId, userId: user.id, action: "option.created", entityType: "proposal_option", entityId: optionId, details: d.name });
     return optionId;
   });
@@ -63,8 +79,12 @@ optionRoutes.get("/:id", (c) => {
   const opt = db.prepare("SELECT * FROM proposal_options WHERE id = ?").get(id) as any;
   if (!opt) return c.json({ error: "not found" }, 404);
   if (!canAccessProject(c.get("user"), opt.project_id)) return c.json({ error: "forbidden" }, 403);
-  const itemIds = (db.prepare("SELECT costing_item_id FROM option_items WHERE option_id = ?").all(id) as any[]).map((r) => r.costing_item_id);
-  return c.json({ option: opt, itemIds });
+  const linkRows = db.prepare("SELECT costing_item_id, section, custom_description FROM option_items WHERE option_id = ?").all(id) as any[];
+  return c.json({
+    option: opt,
+    itemIds: linkRows.map((r) => r.costing_item_id),
+    items: linkRows.map((r) => ({ id: r.costing_item_id, section: r.section, customDescription: r.custom_description })),
+  });
 });
 
 const updateSchema = schema.partial().omit({ projectId: true, revisionId: true });
@@ -85,11 +105,10 @@ optionRoutes.put("/:id", async (c) => {
   if (d.discountMode !== undefined) db.prepare("UPDATE proposal_options SET discount_mode = ? WHERE id = ?").run(d.discountMode ? 1 : 0, id);
   if (d.currency !== undefined) db.prepare("UPDATE proposal_options SET currency = ? WHERE id = ?").run(d.currency, id);
   if (d.discountDisplay !== undefined) db.prepare("UPDATE proposal_options SET discount_display = ? WHERE id = ?").run(d.discountDisplay, id);
-  if (d.itemIds) {
+  if (d.priceView !== undefined) db.prepare("UPDATE proposal_options SET price_view = ? WHERE id = ?").run(d.priceView, id);
+  if (d.items || d.itemIds) {
     db.prepare("DELETE FROM option_items WHERE option_id = ?").run(id);
-    for (const itemId of d.itemIds) {
-      db.prepare("INSERT OR IGNORE INTO option_items (option_id, costing_item_id) VALUES (?,?)").run(id, itemId);
-    }
+    insertOptionItems(id, d as any);
   }
   logActivity({ projectId: opt.project_id, userId: user.id, action: "option.updated", entityType: "proposal_option", entityId: id, details: d.name });
   return c.json({ ok: true });

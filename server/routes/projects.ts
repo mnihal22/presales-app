@@ -81,8 +81,9 @@ projectRoutes.get("/:id", (c) => {
     .all(id);
   const revisions = db
     .prepare(
-      `SELECT r.*, u.display_name AS created_by_name, lu.display_name AS locked_by_name
+      `SELECT r.*, u.display_name AS created_by_name, lu.display_name AS locked_by_name, cu.display_name AS committed_by_name
        FROM revisions r JOIN users u ON u.id = r.created_by LEFT JOIN users lu ON lu.id = r.locked_by
+       LEFT JOIN users cu ON cu.id = r.committed_by
        WHERE r.project_id = ? ORDER BY r.rev_no DESC`
     )
     .all(id);
@@ -217,12 +218,12 @@ projectRoutes.post("/:id/duplicate", (c) => {
       const newRevId = revMap.get(o.revision_id);
       if (!newRevId) continue;
       const or2 = db
-        .prepare("INSERT INTO proposal_options (project_id, revision_id, name, description, template_id, created_by, discount_display, discount_mode, currency) VALUES (?,?,?,?,?,?,?,?,?)")
-        .run(newId, newRevId, o.name, o.description, o.template_id, user.id, o.discount_display, o.discount_mode, o.currency);
+        .prepare("INSERT INTO proposal_options (project_id, revision_id, name, description, template_id, created_by, discount_display, discount_mode, currency, price_view) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        .run(newId, newRevId, o.name, o.description, o.template_id, user.id, o.discount_display, o.discount_mode, o.currency, o.price_view ?? "unit");
       const newOptId = Number(or2.lastInsertRowid);
-      for (const oi of db.prepare("SELECT costing_item_id FROM option_items WHERE option_id = ?").all(o.id) as any[]) {
+      for (const oi of db.prepare("SELECT costing_item_id, section, custom_description FROM option_items WHERE option_id = ?").all(o.id) as any[]) {
         const mapped = itemMap.get(oi.costing_item_id);
-        if (mapped) db.prepare("INSERT OR IGNORE INTO option_items (option_id, costing_item_id) VALUES (?,?)").run(newOptId, mapped);
+        if (mapped) db.prepare("INSERT OR IGNORE INTO option_items (option_id, costing_item_id, section, custom_description) VALUES (?,?,?,?)").run(newOptId, mapped, oi.section ?? null, oi.custom_description ?? null);
       }
     }
 
@@ -293,6 +294,38 @@ projectRoutes.post("/:id/revisions/:revId/lock", (c) => {
   if (!canAccessProject(user, projectId)) return c.json({ error: "forbidden" }, 403);
   db.prepare("UPDATE revisions SET status = 'locked', locked_by = ? WHERE id = ? AND project_id = ?").run(user.id, revId, projectId);
   logActivity({ projectId, userId: user.id, action: "revision.locked", entityType: "revision", entityId: revId });
+  return c.json({ ok: true });
+});
+
+// Commit = "costing & proposal build is complete". Afterwards only sell-side
+// adjusters (GPM, sell overrides, APL/discounted-sell) stay editable, and
+// Professional Services lines can still be added/edited/removed.
+projectRoutes.post("/:id/revisions/:revId/commit", (c) => {
+  const projectId = Number(c.req.param("id"));
+  const revId = Number(c.req.param("revId"));
+  const user = c.get("user");
+  if (!canAccessProject(user, projectId)) return c.json({ error: "forbidden" }, 403);
+  const rev = db.prepare("SELECT * FROM revisions WHERE id = ? AND project_id = ?").get(revId, projectId) as any;
+  if (!rev) return c.json({ error: "not found" }, 404);
+  if (rev.status === "locked") return c.json({ error: "revision is locked — unlock it first" }, 409);
+  if (rev.committed_at) return c.json({ error: "revision is already committed" }, 409);
+  db.prepare("UPDATE revisions SET committed_at = datetime('now'), committed_by = ? WHERE id = ?").run(user.id, revId);
+  logActivity({ projectId, userId: user.id, action: "revision.committed", entityType: "revision", entityId: revId, details: `${rev.label || "R" + rev.rev_no} — costing & proposal build complete` });
+  return c.json({ ok: true });
+});
+
+projectRoutes.post("/:id/revisions/:revId/uncommit", (c) => {
+  const projectId = Number(c.req.param("id"));
+  const revId = Number(c.req.param("revId"));
+  const user = c.get("user");
+  if (!canAccessProject(user, projectId)) return c.json({ error: "forbidden" }, 403);
+  const rev = db.prepare("SELECT * FROM revisions WHERE id = ? AND project_id = ?").get(revId, projectId) as any;
+  if (!rev) return c.json({ error: "not found" }, 404);
+  if (!rev.committed_at) return c.json({ error: "revision is not committed" }, 409);
+  const allowed = user.role === "admin" || user.role === "presales" || rev.committed_by === user.id;
+  if (!allowed) return c.json({ error: "only an admin, presales, or the person who committed can un-commit" }, 403);
+  db.prepare("UPDATE revisions SET committed_at = NULL, committed_by = NULL WHERE id = ?").run(revId);
+  logActivity({ projectId, userId: user.id, action: "revision.uncommitted", entityType: "revision", entityId: revId, details: rev.label || `R${rev.rev_no}` });
   return c.json({ ok: true });
 });
 

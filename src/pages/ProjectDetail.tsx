@@ -12,6 +12,7 @@ import { ArrowLeft, GitBranch, History } from "lucide-react";
 import CostingTab from "@/components/project/CostingTab";
 import SummaryTab from "@/components/project/SummaryTab";
 import OptionsTab from "@/components/project/OptionsTab";
+import ProposalTab from "@/components/project/ProposalTab";
 import QuotesTab from "@/components/project/QuotesTab";
 import ServicesTab from "@/components/project/ServicesTab";
 import TasksTab from "@/components/project/TasksTab";
@@ -147,6 +148,11 @@ export default function ProjectDetail() {
                     {r.status === "locked"
                       ? <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">locked{r.locked_by_name ? ` by ${r.locked_by_name}` : ""}</Badge>
                       : <Badge variant="secondary">open</Badge>}
+                    {!!r.committed_at && (
+                      <Badge variant="secondary" className="ml-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                        committed{r.committed_by_name ? ` by ${r.committed_by_name}` : ""}
+                      </Badge>
+                    )}
                   </td>
                   <td className="py-2 text-muted-foreground">{r.note || "—"}</td>
                 </tr>
@@ -161,6 +167,7 @@ export default function ProjectDetail() {
           <TabsTrigger value="costing">Costing Sheet</TabsTrigger>
           <TabsTrigger value="summary">Summary</TabsTrigger>
           <TabsTrigger value="options">Proposal Options</TabsTrigger>
+          <TabsTrigger value="proposal">Proposal</TabsTrigger>
           <TabsTrigger value="quotes">Vendor Quotes</TabsTrigger>
           <TabsTrigger value="services">Services</TabsTrigger>
           <TabsTrigger value="tasks">Tasks</TabsTrigger>
@@ -173,6 +180,7 @@ export default function ProjectDetail() {
         <TabsContent value="options">
           <OptionsTab projectId={project.id} revision={activeRevision} costingItems={costingItems} locked={activeRevision?.status === "locked"} />
         </TabsContent>
+        <TabsContent value="proposal"><ProposalTab projectId={project.id} revision={activeRevision} /></TabsContent>
         <TabsContent value="quotes"><QuotesTab projectId={project.id} revisions={revisions} /></TabsContent>
         <TabsContent value="services"><ServicesTab projectId={project.id} revisions={revisions} activeRevision={activeRevision} /></TabsContent>
         <TabsContent value="tasks"><TasksTab projectId={project.id} /></TabsContent>

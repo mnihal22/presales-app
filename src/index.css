@@ -22,6 +22,7 @@
     --destructive: 0 55% 52%;
     --destructive-foreground: 0 0% 98%;
     --border: 264 14% 86%;
+    --grid-line: 264 16% 76%;         /* table cell borders — clearly visible, work-first */
     --input: 264 14% 83%;
     --ring: 258 40% 50%;
     --radius: 0.625rem;
@@ -53,6 +54,7 @@
     --destructive: 0 50% 45%;
     --destructive-foreground: 0 0% 98%;
     --border: 258 16% 21%;
+    --grid-line: 258 18% 30%;
     --input: 258 16% 25%;
     --ring: 262 45% 62%;
     --sidebar-background: 260 34% 4.5%;  /* near-black purple, deep contrast vs content */
@@ -72,5 +74,14 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* Working tables get clean, visible cell borders everywhere — readability of
+     the grid beats decoration. Collapsed borders keep lines a crisp 1px. */
+  table {
+    border-collapse: collapse;
+  }
+  table th,
+  table td {
+    border: 1px solid hsl(var(--grid-line));
   }
 }

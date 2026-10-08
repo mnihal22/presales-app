@@ -126,6 +126,21 @@ function assertOpen(rev: any) {
   return rev.status === "open";
 }
 
+// --- Committed revisions -----------------------------------------------------
+// Commit = "costing & proposal build is complete". Cost-side structure freezes;
+// only sell-side adjusters (and presentation fields) remain editable, and
+// Professional Services lines stay fully editable (PS is sized late).
+const PS_CATEGORY = "Professional Services";
+const isPs = (cat: string | null | undefined) => cat === PS_CATEGORY;
+const committed = (rev: any) => !!rev.committed_at;
+// camelCase keys of itemPatchSchema that survive a commit
+const COMMIT_EDITABLE = new Set([
+  "marginPct", "sellOverride", "discSellOverride", "aplUnitPrice", "aplDiscountPct",
+  "notes", "proposalDescription", "rowColor", "sort", "inProposal",
+]);
+const COMMIT_BLOCKED_MSG =
+  "revision is committed — only margins / sell-price adjusters and Professional Services lines can still change";
+
 costingRoutes.post("/:revisionId/items", async (c) => {
   const revisionId = Number(c.req.param("revisionId"));
   const user = c.get("user");
@@ -135,6 +150,9 @@ costingRoutes.post("/:revisionId/items", async (c) => {
 
   const parsed = itemSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input", issues: parsed.error.issues }, 400);
+  if (committed(rev) && !isPs(parsed.data.category)) {
+    return c.json({ error: `${COMMIT_BLOCKED_MSG} (new lines must be "${PS_CATEGORY}")` }, 409);
+  }
   const res = db
     .prepare(`INSERT INTO costing_items (${INSERT_COLS}) VALUES (${INSERT_COLS.split(",").map(() => "?").join(",")})`)
     .run(...itemValues(revisionId, parsed.data));
@@ -153,7 +171,17 @@ costingRoutes.put("/items/:itemId", async (c) => {
 
   const parsed = itemPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
-  const d = parsed.data;
+  let d = parsed.data;
+
+  // Committed revision: PS rows stay fully editable; other rows only sell-side adjusters
+  if (committed(rev) && !isPs(item.category)) {
+    const filtered: any = {};
+    for (const [k, v] of Object.entries(d)) if (v !== undefined && COMMIT_EDITABLE.has(k)) filtered[k] = v;
+    if (Object.keys(filtered).length === 0) return c.json({ error: COMMIT_BLOCKED_MSG }, 409);
+    d = filtered;
+  } else if (committed(rev) && isPs(item.category) && d.category && !isPs(d.category)) {
+    return c.json({ error: `committed revision — a "${PS_CATEGORY}" line cannot change category` }, 409);
+  }
 
   const fieldMap: [string, any, string][] = [
     ["category", d.category, "category"], ["description", d.description, "description"], ["vendor", d.vendor, "vendor"],
@@ -201,7 +229,16 @@ costingRoutes.post("/:revisionId/bulk-update", async (c) => {
 
   const parsed = bulkSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
-  const { itemIds, fields: d } = parsed.data;
+  const { itemIds } = parsed.data;
+  let d = parsed.data.fields;
+
+  // Committed revision: bulk update limited to sell-side adjusters / presentation
+  if (committed(rev)) {
+    const filtered: any = {};
+    for (const [k, v] of Object.entries(d)) if (v !== undefined && COMMIT_EDITABLE.has(k)) filtered[k] = v;
+    if (Object.keys(filtered).length === 0) return c.json({ error: COMMIT_BLOCKED_MSG }, 409);
+    d = filtered;
+  }
 
   const fieldMap: [any, string][] = [
     [d.category, "category"], [d.vendor, "vendor"], [d.marginPct, "margin_pct"],
@@ -240,7 +277,12 @@ costingRoutes.post("/:revisionId/bulk-delete", async (c) => {
   const parsed = z.object({ itemIds: z.array(z.number()).min(1).max(5000) }).safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid input" }, 400);
   const placeholders = parsed.data.itemIds.map(() => "?").join(",");
-  const res = db.prepare(`DELETE FROM costing_items WHERE revision_id = ? AND id IN (${placeholders})`).run(revisionId, ...parsed.data.itemIds);
+  // Committed revision: only Professional Services lines may be removed
+  const psFilter = committed(rev) ? ` AND category = '${PS_CATEGORY}'` : "";
+  const res = db.prepare(`DELETE FROM costing_items WHERE revision_id = ? AND id IN (${placeholders})${psFilter}`).run(revisionId, ...parsed.data.itemIds);
+  if (committed(rev) && res.changes < parsed.data.itemIds.length) {
+    return c.json({ ok: true, deleted: res.changes, warning: `${parsed.data.itemIds.length - res.changes} non-PS line(s) kept — ${COMMIT_BLOCKED_MSG}` });
+  }
   logActivity({ projectId: rev.project_id, userId: user.id, action: "costing.bulk_deleted", entityType: "revision", entityId: revisionId, details: `${res.changes} items` });
   return c.json({ ok: true, deleted: res.changes });
 });
@@ -253,6 +295,7 @@ costingRoutes.delete("/items/:itemId", (c) => {
   const { rev, error } = revisionWithAccess(item.revision_id, user) as any;
   if (error) return c.json({ error: error[1] }, error[0]);
   if (!assertOpen(rev)) return c.json({ error: "revision is locked" }, 409);
+  if (committed(rev) && !isPs(item.category)) return c.json({ error: COMMIT_BLOCKED_MSG }, 409);
   db.prepare("DELETE FROM costing_items WHERE id = ?").run(itemId);
   return c.json({ ok: true });
 });
@@ -264,6 +307,7 @@ costingRoutes.post("/:revisionId/import-from-quote", async (c) => {
   const { rev, error } = revisionWithAccess(revisionId, user) as any;
   if (error) return c.json({ error: error[1] }, error[0]);
   if (!assertOpen(rev)) return c.json({ error: "revision is locked" }, 409);
+  if (committed(rev)) return c.json({ error: "revision is committed — importing adds cost lines, which are frozen" }, 409);
 
   const parsed = z
     .object({

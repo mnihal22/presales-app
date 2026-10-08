@@ -24,6 +24,31 @@ summaryRoutes.get("/revision/:revisionId", (c) => {
   return c.json({ project, revision: rev, ...summarize(rows), itemCount: rows.length });
 });
 
+// All proposal options of a revision, each with its own summary — one round
+// trip for the Summary tab's per-option comparison table.
+summaryRoutes.get("/revision/:revisionId/options", (c) => {
+  const revisionId = Number(c.req.param("revisionId"));
+  const rev = db.prepare("SELECT * FROM revisions WHERE id = ?").get(revisionId) as any;
+  if (!rev) return c.json({ error: "not found" }, 404);
+  if (!canAccessProject(c.get("user"), rev.project_id)) return c.json({ error: "forbidden" }, 403);
+
+  const options = db
+    .prepare("SELECT * FROM proposal_options WHERE revision_id = ? ORDER BY created_at")
+    .all(revisionId) as any[];
+  const opts = calcOptsForProject(rev.project_id);
+  const out = options.map((opt) => {
+    const rows = (db
+      .prepare(
+        `SELECT ci.* FROM costing_items ci
+         JOIN option_items oi ON oi.costing_item_id = ci.id
+         WHERE oi.option_id = ? ORDER BY ci.sort, ci.id`
+      )
+      .all(opt.id) as CostingRow[]).map((r) => computeRow(r, opts));
+    return { option: opt, ...summarize(rows), itemCount: rows.length };
+  });
+  return c.json(out);
+});
+
 // Summary for a proposal option (only items assigned to that option)
 summaryRoutes.get("/option/:optionId", (c) => {
   const optionId = Number(c.req.param("optionId"));

@@ -21,7 +21,10 @@ export default function OptionsTab({ projectId, revision, costingItems }: any) {
   const [discountMode, setDiscountMode] = useState(false);
   const [currency, setCurrency] = useState<string>("AED");
   const [discountDisplay, setDiscountDisplay] = useState<string>("lumpsum");
+  const [priceView, setPriceView] = useState<string>("unit");
   const [itemIds, setItemIds] = useState<number[]>([]);
+  // Per-item proposal metadata: custom section header + customer-facing redraft
+  const [links, setLinks] = useState<Record<number, { section: string; customDescription: string }>>({});
   const [summaries, setSummaries] = useState<Record<number, any>>({});
   const [busy, setBusy] = useState("");
 
@@ -79,18 +82,33 @@ export default function OptionsTab({ projectId, revision, costingItems }: any) {
       setDiscountMode(!!opt.discount_mode);
       setCurrency(opt.currency || "AED");
       setDiscountDisplay(opt.discount_display || "lumpsum");
-      api<any>(`/api/options/${opt.id}`).then((d) => setItemIds(d.itemIds));
+      setPriceView(opt.price_view || "unit");
+      api<any>(`/api/options/${opt.id}`).then((d) => {
+        setItemIds(d.itemIds);
+        const lk: Record<number, { section: string; customDescription: string }> = {};
+        for (const it of d.items || []) lk[it.id] = { section: it.section || "", customDescription: it.customDescription || "" };
+        setLinks(lk);
+      });
     } else {
       setEditId(null);
       setName(""); setDescription(""); setTemplateId("");
-      setDiscountMode(false); setCurrency("AED"); setDiscountDisplay("lumpsum");
+      setDiscountMode(false); setCurrency("AED"); setDiscountDisplay("lumpsum"); setPriceView("unit");
       setItemIds(costingItems.filter((i: any) => i.in_proposal).map((i: any) => i.id));
+      setLinks({});
     }
     setOpen(true);
   };
 
+  const setLink = (id: number, patch: Partial<{ section: string; customDescription: string }>) =>
+    setLinks((prev) => ({ ...prev, [id]: { ...(prev[id] ?? { section: "", customDescription: "" }), ...patch } }));
+
   const save = async () => {
-    const body = JSON.stringify({ name, description: description || null, templateId: templateId ? Number(templateId) : null, itemIds, discountMode, currency, discountDisplay });
+    const items = itemIds.map((id) => ({
+      id,
+      section: links[id]?.section?.trim() || null,
+      customDescription: links[id]?.customDescription?.trim() || null,
+    }));
+    const body = JSON.stringify({ name, description: description || null, templateId: templateId ? Number(templateId) : null, itemIds, items, discountMode, currency, discountDisplay, priceView });
     if (editId) await api(`/api/options/${editId}`, { method: "PUT", body });
     else await api("/api/options", { method: "POST", body: JSON.stringify({ ...JSON.parse(body), projectId, revisionId: revision.id }) });
     setOpen(false);
@@ -145,6 +163,16 @@ export default function OptionsTab({ projectId, revision, costingItems }: any) {
                       <SelectItem value="USD">USD — US Dollars (÷ 3.68)</SelectItem>
                     </SelectContent>
                   </Select></div>
+                <div><label className="text-sm font-medium">Prices shown on customer proposal</label>
+                  <Select value={priceView} onValueChange={setPriceView}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="unit">Unit price (as costed)</SelectItem>
+                      <SelectItem value="monthly">Per month</SelectItem>
+                      <SelectItem value="yearly">Per year</SelectItem>
+                      <SelectItem value="total">Total period</SelectItem>
+                    </SelectContent>
+                  </Select></div>
                 <label className="flex items-start gap-2 text-sm rounded-md border p-2 mt-5">
                   <Checkbox className="mt-0.5" checked={discountMode} onCheckedChange={(v) => setDiscountMode(!!v)} />
                   <span>
@@ -165,15 +193,30 @@ export default function OptionsTab({ projectId, revision, costingItems }: any) {
               )}
               <div>
                 <label className="text-sm font-medium">Items included in this option ({itemIds.length} of {costingItems.length})</label>
-                <div className="mt-1 max-h-64 space-y-1 overflow-y-auto rounded-md border p-2">
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  For each included item you can set a <b>section header</b> (items sharing a header are grouped under it on the proposal)
+                  and <b>redraft the customer-facing description</b>. Lines sharing a Map # still merge into one proposal line.
+                </p>
+                <div className="mt-1 max-h-72 overflow-y-auto rounded-md border p-2">
                   {costingItems.map((it: any) => (
-                    <label key={it.id} className="flex items-center gap-2 text-sm py-0.5">
-                      <Checkbox checked={itemIds.includes(it.id)}
-                        onCheckedChange={(v) => setItemIds(v ? [...itemIds, it.id] : itemIds.filter((x) => x !== it.id))} />
-                      <span className="font-mono text-xs text-muted-foreground w-16">{it.map_no || "—"}</span>
-                      <span className="flex-1 truncate">{it.description}</span>
-                      <span className="text-xs text-muted-foreground">{fmt(it.selling_total_aed)}</span>
-                    </label>
+                    <div key={it.id} className="py-1 border-b last:border-0">
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox checked={itemIds.includes(it.id)}
+                          onCheckedChange={(v) => setItemIds(v ? [...itemIds, it.id] : itemIds.filter((x) => x !== it.id))} />
+                        <span className="font-mono text-xs text-muted-foreground w-16">{it.map_no || "—"}</span>
+                        <span className="flex-1 truncate">{it.description}</span>
+                        <span className="text-xs text-muted-foreground">{fmt(it.selling_total_aed)}</span>
+                      </label>
+                      {itemIds.includes(it.id) && (
+                        <div className="ml-6 mt-1 grid grid-cols-2 gap-2">
+                          <Input className="h-7 text-xs" placeholder="Section header (e.g. Phase 1 — Core)"
+                            value={links[it.id]?.section ?? ""} onChange={(e) => setLink(it.id, { section: e.target.value })} />
+                          <Input className="h-7 text-xs"
+                            placeholder={it.proposal_description ? `Customer text: ${it.proposal_description}` : "Customer-facing description (optional)"}
+                            value={links[it.id]?.customDescription ?? ""} onChange={(e) => setLink(it.id, { customDescription: e.target.value })} />
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -206,6 +249,7 @@ export default function OptionsTab({ projectId, revision, costingItems }: any) {
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {o.template_name || "Default template"} · {o.item_count} items · {o.currency || "AED"}
+                  {o.price_view && o.price_view !== "unit" ? ` · ${o.price_view === "monthly" ? "per month" : o.price_view === "yearly" ? "per year" : "total period"}` : ""}
                   {o.discount_mode ? (o.discount_display === "line_item" ? " · discounted (line-by-line)" : " · discounted (lump-sum)") : ""} · by {o.created_by_name}
                 </div>
               </CardHeader>

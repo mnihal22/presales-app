@@ -64,7 +64,8 @@ export default function QuotesTab({ projectId, revisions }: any) {
   const [importOpen, setImportOpen] = useState(false);
   const [parseResult, setParseResult] = useState<any>(null);
   const [colFields, setColFields] = useState<Record<number, string>>({}); // column index → field key
-  const [skipRows, setSkipRows] = useState("1");
+  const [startRow, setStartRow] = useState("2"); // 1-based first data row
+  const [endRow, setEndRow] = useState("");      // 1-based last data row, blank = end of sheet
   const [impVendor, setImpVendor] = useState("");
   const [impReference, setImpReference] = useState("");
   const [impCurrency, setImpCurrency] = useState("USD");
@@ -143,7 +144,8 @@ export default function QuotesTab({ projectId, revisions }: any) {
     if (!res.ok) { alert(data.error || "upload failed"); return; }
     setParseResult(data);
     setSavedFormats(data.savedFormats || []);
-    setSkipRows("1");
+    setStartRow("2");
+    setEndRow("");
     setColFields(guessColumns(data.preview, 1));
     if (!impVendor) setImpVendor(file.name.replace(/\.[^.]+$/, ""));
   };
@@ -171,7 +173,8 @@ export default function QuotesTab({ projectId, revisions }: any) {
     const inv: Record<number, string> = {};
     for (const [field, col] of Object.entries(cfg.mapping)) if (col != null) inv[Number(col as any)] = field;
     setColFields(inv);
-    setSkipRows(String(cfg.skipRows ?? 0));
+    setStartRow(String(cfg.startRow ?? (cfg.skipRows ?? 0) + 1));
+    setEndRow(cfg.endRow ? String(cfg.endRow) : "");
     setImpVendor(f.vendor);
   };
 
@@ -191,7 +194,8 @@ export default function QuotesTab({ projectId, revisions }: any) {
             unitPrice: fieldToCol("unitPrice"), listUnitPrice: fieldToCol("listUnitPrice"),
             extendedBuy: fieldToCol("extendedBuy"), leadTime: fieldToCol("leadTime"),
           },
-          skipRows: Number(skipRows) || 0,
+          startRow: Number(startRow) || 1,
+          endRow: endRow ? Number(endRow) : null,
           saveFormatAs: saveFormatAs || null,
         }),
       });
@@ -295,9 +299,12 @@ export default function QuotesTab({ projectId, revisions }: any) {
                         <SelectContent>{savedFormats.map((f) => <SelectItem key={f.id} value={String(f.id)}>{f.vendor} — {f.name}</SelectItem>)}</SelectContent>
                       </Select></div>
                     )}
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs text-muted-foreground whitespace-nowrap">Skip first N rows (headers)</label>
-                    <Input className="h-8 w-20" type="number" value={skipRows} onChange={(e) => setSkipRows(e.target.value)} />
+                  <div className="col-span-2 flex items-center gap-2">
+                    <label className="text-xs text-muted-foreground whitespace-nowrap">Import rows from</label>
+                    <Input className="h-8 w-20" type="number" min={1} value={startRow} onChange={(e) => setStartRow(e.target.value)} title="First data row (1-based)" />
+                    <label className="text-xs text-muted-foreground whitespace-nowrap">to</label>
+                    <Input className="h-8 w-20" type="number" min={1} value={endRow} onChange={(e) => setEndRow(e.target.value)} placeholder="end" title="Last data row (1-based, inclusive) — blank = end of sheet" />
+                    <span className="text-xs text-muted-foreground">(row numbers as shown below; amber = skipped)</span>
                   </div>
                 </div>
 
@@ -326,16 +333,21 @@ export default function QuotesTab({ projectId, revisions }: any) {
                         </tr>
                       </thead>
                       <tbody>
-                        {parseResult.preview.map((row: any[], ri: number) => (
-                          <tr key={ri} className={`border-b ${ri < Number(skipRows || 0) ? "bg-amber-50 dark:bg-amber-500/10 text-muted-foreground" : ""}`}>
-                            <td className="px-1 py-0.5 text-muted-foreground">{ri + 1}</td>
+                        {parseResult.preview.map((row: any[], ri: number) => {
+                          const rowNo = ri + 1;
+                          const before = rowNo < (Number(startRow) || 1);
+                          const after = !!endRow && rowNo > Number(endRow);
+                          return (
+                          <tr key={ri} className={`border-b ${before || after ? "bg-amber-50 dark:bg-amber-500/10 text-muted-foreground" : ""} ${after ? "line-through decoration-muted-foreground/40" : ""}`}>
+                            <td className="px-1 py-0.5 text-muted-foreground">{rowNo}</td>
                             {previewHeaders.map((ci: number) => (
                               <td key={ci} className={`px-1 py-0.5 max-w-44 truncate ${colFields[ci] ? "font-medium" : "text-muted-foreground/70"}`}>
                                 {String(row[ci] ?? "")}
                               </td>
                             ))}
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

@@ -112,7 +112,9 @@ const commitSchema = z.object({
     extendedBuy: z.number().optional().nullable(),
     leadTime: z.number().optional().nullable(),
   }),
-  skipRows: z.number().default(0),
+  skipRows: z.number().default(0), // legacy: rows to skip from the top (= startRow - 1)
+  startRow: z.number().int().min(1).optional().nullable(), // 1-based first data row (overrides skipRows)
+  endRow: z.number().int().min(1).optional().nullable(),   // 1-based last data row (inclusive; blank = end of sheet)
   saveFormatAs: z.string().optional().nullable(), // save mapping as a reusable vendor format
 });
 
@@ -128,7 +130,10 @@ importRoutes.post("/commit", async (c) => {
 
   const ext = path.extname(storedPath).toLowerCase();
   const { rows } = await extractRows(storedPath, ext);
-  const dataRows = rows.slice(d.skipRows);
+  // Row range: 1-based, inclusive. startRow wins over legacy skipRows.
+  const startRow = Math.max(1, d.startRow ?? d.skipRows + 1);
+  const endRow = d.endRow != null && d.endRow >= startRow ? Math.min(d.endRow, rows.length) : rows.length;
+  const dataRows = rows.slice(startRow - 1, endRow);
 
   const items: {
     description: string; partNo: string | null; qty: number; unitPrice: number;
@@ -150,7 +155,7 @@ importRoutes.post("/commit", async (c) => {
       if (unitPrice == null || unitPrice === 0) {
         unitPrice = computedUnit; // derive unit price when no explicit column mapped
       } else if (Math.abs(unitPrice - computedUnit) > Math.max(0.01, Math.abs(unitPrice) * 0.005)) {
-        warnings.push({ line: d.skipRows + ri + 1, description: desc.slice(0, 60), unitPrice, computedUnit: Math.round(computedUnit * 100) / 100 });
+        warnings.push({ line: startRow + ri, description: desc.slice(0, 60), unitPrice, computedUnit: Math.round(computedUnit * 100) / 100 });
       }
     }
     items.push({
@@ -163,7 +168,7 @@ importRoutes.post("/commit", async (c) => {
       leadTime: d.mapping.leadTime != null ? String(r[d.mapping.leadTime] ?? "").trim() || null : null,
     });
   });
-  if (items.length === 0) return c.json({ error: "no importable rows found — check column mapping and skip rows" }, 400);
+  if (items.length === 0) return c.json({ error: "no importable rows found — check column mapping and the start/end row range" }, 400);
 
   const tx = db.transaction(() => {
     const qres = db
@@ -180,7 +185,7 @@ importRoutes.post("/commit", async (c) => {
     ).run(d.projectId, quoteId, d.reference ?? null, d.filename, path.basename(d.storedName), null, d.size, user.id);
     if (d.saveFormatAs) {
       db.prepare("INSERT INTO vendor_formats (vendor, name, columns_json, notes) VALUES (?,?,?,?)")
-        .run(d.vendor, d.saveFormatAs, JSON.stringify({ mapping: d.mapping, skipRows: d.skipRows }), null);
+        .run(d.vendor, d.saveFormatAs, JSON.stringify({ mapping: d.mapping, skipRows: startRow - 1, startRow, endRow: d.endRow ?? null }), null);
     }
     logActivity({ projectId: d.projectId, userId: user.id, action: "quote.imported_from_file", entityType: "quote", entityId: quoteId, details: `${d.vendor}: ${items.length} items from ${d.filename}` });
     return quoteId;
